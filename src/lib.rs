@@ -2567,6 +2567,11 @@ impl RevoraRevenueShare {
     }
 }
 
+pub mod vesting;
+
+#[cfg(test)]
+mod vesting_test;
+
 mod test;
 mod test_auth;
 mod test_cross_contract;
