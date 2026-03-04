@@ -143,6 +143,8 @@ const EVENT_METADATA_UPDATED: Symbol = symbol_short!("meta_upd");
 const EVENT_MIN_REV_THRESHOLD_SET: Symbol = symbol_short!("min_rev");
 /// Emitted when reported revenue is below the offering's minimum threshold; no distribution triggered (#25).
 const EVENT_REV_BELOW_THRESHOLD: Symbol = symbol_short!("rev_below");
+/// Emitted when per-offering investment constraints are set or updated (#97).
+const EVENT_INV_CONSTRAINTS: Symbol = symbol_short!("inv_cfg");
 
 const BPS_DENOMINATOR: i128 = 10_000;
 
@@ -175,6 +177,14 @@ pub struct ConcentrationLimitConfig {
     pub max_bps: u32,
     /// If true, `report_revenue` will fail if current concentration exceeds `max_bps`.
     pub enforce: bool,
+}
+
+/// Per-offering investment constraints (#97). Min/max stake per investor; off-chain enforced.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct InvestmentConstraintsConfig {
+    pub min_stake: i128,
+    pub max_stake: i128,
 }
 
 /// Per-offering audit log summary (#34).
@@ -314,6 +324,8 @@ pub enum DataKey {
     IssuerRegistered(Address),
     /// Total deposited revenue for an offering token (#39).
     DepositedRevenue(Address),
+    /// Per-offering investment constraints: min and max stake per investor (#97).
+    InvestmentConstraints(Address, Address),
 }
 
 /// Maximum number of offerings returned in a single page.
@@ -1295,6 +1307,51 @@ impl RevoraRevenueShare {
     /// Get per-offering audit summary (total revenue and report count).
     pub fn get_audit_summary(env: Env, issuer: Address, token: Address) -> Option<AuditSummary> {
         let key = DataKey::AuditSummary(issuer, token);
+        env.storage().persistent().get(&key)
+    }
+
+    // ── Per-offering investment constraints (#97) ─────────────
+
+    /// Set min and max stake per investor for an offering. Issuer/admin only. Constraints are read by off-chain systems for enforcement.
+    pub fn set_investment_constraints(
+        env: Env,
+        issuer: Address,
+        token: Address,
+        min_stake: i128,
+        max_stake: i128,
+    ) -> Result<(), RevoraError> {
+        Self::require_not_frozen(&env)?;
+        let current_issuer =
+            Self::get_current_issuer(&env, &token).ok_or(RevoraError::OfferingNotFound)?;
+        if current_issuer != issuer {
+            return Err(RevoraError::OfferingNotFound);
+        }
+        issuer.require_auth();
+        if min_stake < 0 || max_stake < 0 {
+            return Err(RevoraError::InvalidAmount);
+        }
+        if max_stake > 0 && min_stake > max_stake {
+            return Err(RevoraError::InvalidAmount);
+        }
+        let key = DataKey::InvestmentConstraints(issuer.clone(), token.clone());
+        let previous = env.storage().persistent().get::<DataKey, InvestmentConstraintsConfig>(&key);
+        env.storage()
+            .persistent()
+            .set(&key, &InvestmentConstraintsConfig { min_stake, max_stake });
+        env.events().publish(
+            (EVENT_INV_CONSTRAINTS, issuer, token),
+            (min_stake, max_stake, previous.is_some()),
+        );
+        Ok(())
+    }
+
+    /// Get per-offering investment constraints. Returns None if not set.
+    pub fn get_investment_constraints(
+        env: Env,
+        issuer: Address,
+        token: Address,
+    ) -> Option<InvestmentConstraintsConfig> {
+        let key = DataKey::InvestmentConstraints(issuer, token);
         env.storage().persistent().get(&key)
     }
 
