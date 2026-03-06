@@ -63,6 +63,7 @@ impl RevoraVesting {
     /// Create a vesting schedule. Admin only.
     /// Linear vesting: amount vests linearly from start_time to end_time.
     /// Cliff: nothing vests before cliff_time; after cliff, linear to end_time.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_schedule(
         env: Env,
         admin: Address,

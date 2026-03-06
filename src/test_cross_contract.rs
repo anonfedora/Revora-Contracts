@@ -198,10 +198,10 @@ fn cross_contract_registry_check_before_offering() {
     // Step 3: Now register offering in Revora (after registry approval)
     // In production, register_offering would call registry.is_approved() internally
     assert!(registry.is_approved(&token));
-    revora.register_offering(&issuer, &token, &5_000, &payout_asset);
+    revora.register_offering(&issuer, &symbol_short!("def"), &token, &5_000, &payout_asset);
 
     // Verify offering was created
-    let offering = revora.get_offering(&issuer, &token);
+    let offering = revora.get_offering(&issuer, &symbol_short!("def"), &token);
     assert!(offering.is_some());
     assert_eq!(offering.unwrap().revenue_share_bps, 5_000);
 }
@@ -290,16 +290,16 @@ fn cross_contract_oracle_revenue_valuation() {
     let payout_asset = Address::generate(&env);
 
     // Register offering
-    revora.register_offering(&issuer, &token, &5_000, &payout_asset);
+    revora.register_offering(&issuer, &symbol_short!("def"), &token, &5_000, &payout_asset);
 
     // Report revenue
-    revora.report_revenue(&issuer, &token, &payout_asset, &1_000_000, &1, &false);
+    revora.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &1_000_000, &1, &false);
 
     // Set payout asset price: $1.00 (1_000_000 scaled)
     oracle.set_price(&admin, &payout_asset, &1_000_000, &1000);
 
     // Get audit summary and compute USD value
-    let summary = revora.get_audit_summary(&issuer, &token).unwrap();
+    let summary = revora.get_audit_summary(&issuer, &token);
     let usd_value = oracle.calculate_value(&payout_asset, &summary.total_revenue);
     assert_eq!(usd_value, 1_000_000); // $1M revenue at $1/token
 }
@@ -353,16 +353,16 @@ fn cross_contract_full_workflow_registry_then_offering() {
     assert!(registry.is_approved(&token));
 
     // Step 3: Register offering in Revora
-    revora.register_offering(&issuer, &token, &3_000, &payout_asset);
+    revora.register_offering(&issuer, &symbol_short!("def"), &token, &3_000, &payout_asset);
 
     // Step 4: Report revenue
-    revora.report_revenue(&issuer, &token, &payout_asset, &500_000, &1, &false);
-    revora.report_revenue(&issuer, &token, &payout_asset, &300_000, &2, &false);
+    revora.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &500_000, &1, &false);
+    revora.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &300_000, &2, &false);
 
     // Step 5: Set price and compute valuation
     oracle.set_price(&admin, &payout_asset, &2_000_000, &1000); // $2.00/token
 
-    let summary = revora.get_audit_summary(&issuer, &token).unwrap();
+    let summary = revora.get_audit_summary(&issuer, &token);
     assert_eq!(summary.total_revenue, 800_000);
     assert_eq!(summary.report_count, 2);
 
@@ -411,14 +411,14 @@ fn cross_contract_error_in_registry_does_not_affect_revora() {
 
     // Register token and offering
     registry.register_token(&admin, &token);
-    revora.register_offering(&issuer, &token, &5_000, &payout_asset);
+    revora.register_offering(&issuer, &symbol_short!("def"), &token, &5_000, &payout_asset);
 
     // Cause an error in registry (duplicate registration)
     let err = registry.try_register_token(&admin, &token);
     assert!(err.is_err());
 
     // Revora state is unaffected
-    let offering = revora.get_offering(&issuer, &token);
+    let offering = revora.get_offering(&issuer, &symbol_short!("def"), &token);
     assert!(offering.is_some());
     assert_eq!(offering.unwrap().revenue_share_bps, 5_000);
 }
@@ -439,10 +439,10 @@ fn cross_contract_revora_operations_independent_of_oracle_state() {
     let payout_asset = Address::generate(&env);
 
     // Revora works fine without any oracle prices set
-    revora.register_offering(&issuer, &token, &5_000, &payout_asset);
-    revora.report_revenue(&issuer, &token, &payout_asset, &100_000, &1, &false);
+    revora.register_offering(&issuer, &symbol_short!("def"), &token, &5_000, &payout_asset);
+    revora.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &100_000, &1, &false);
 
-    let summary = revora.get_audit_summary(&issuer, &token).unwrap();
+    let summary = revora.get_audit_summary(&issuer, &token);
     assert_eq!(summary.total_revenue, 100_000);
 
     // Oracle has no data - querying returns None
@@ -475,17 +475,17 @@ fn cross_contract_concurrent_state_changes() {
     let payout_3 = Address::generate(&env);
 
     registry.register_token(&admin, &token_1);
-    revora.register_offering(&issuer, &token_1, &1_000, &payout_1);
+    revora.register_offering(&issuer, &symbol_short!("def"), &token_1, &1_000, &payout_1);
 
     registry.register_token(&admin, &token_2);
-    revora.register_offering(&issuer, &token_2, &2_000, &payout_2);
+    revora.register_offering(&issuer, &symbol_short!("def"), &token_2, &2_000, &payout_2);
 
     registry.register_token(&admin, &token_3);
-    revora.register_offering(&issuer, &token_3, &3_000, &payout_3);
+    revora.register_offering(&issuer, &symbol_short!("def"), &token_3, &3_000, &payout_3);
 
     // Verify both contracts have consistent state
     assert_eq!(registry.get_token_count(), 3);
-    assert_eq!(revora.get_offering_count(&issuer), 3);
+    assert_eq!(revora.get_offering_count(&issuer, &symbol_short!("def")), 3);
 
     // All tokens approved in registry
     assert!(registry.is_approved(&token_1));
@@ -493,9 +493,9 @@ fn cross_contract_concurrent_state_changes() {
     assert!(registry.is_approved(&token_3));
 
     // All offerings registered in Revora
-    assert!(revora.get_offering(&issuer, &token_1).is_some());
-    assert!(revora.get_offering(&issuer, &token_2).is_some());
-    assert!(revora.get_offering(&issuer, &token_3).is_some());
+    assert!(revora.get_offering(&issuer, &symbol_short!("def"), &token_1).is_some());
+    assert!(revora.get_offering(&issuer, &symbol_short!("def"), &token_2).is_some());
+    assert!(revora.get_offering(&issuer, &symbol_short!("def"), &token_3).is_some());
 }
 
 #[test]
@@ -515,19 +515,19 @@ fn cross_contract_oracle_price_updates_across_revenue_reports() {
     let token = Address::generate(&env);
     let payout_asset = Address::generate(&env);
 
-    revora.register_offering(&issuer, &token, &5_000, &payout_asset);
+    revora.register_offering(&issuer, &symbol_short!("def"), &token, &5_000, &payout_asset);
 
     // Report revenue at $1.00
-    revora.report_revenue(&issuer, &token, &payout_asset, &100_000, &1, &false);
+    revora.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &100_000, &1, &false);
     oracle.set_price(&admin, &payout_asset, &1_000_000, &100);
     let val_1 = oracle.calculate_value(&payout_asset, &100_000);
     assert_eq!(val_1, 100_000); // 100k * $1
 
     // Price doubles to $2.00
     oracle.set_price(&admin, &payout_asset, &2_000_000, &200);
-    revora.report_revenue(&issuer, &token, &payout_asset, &100_000, &2, &false);
+    revora.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &100_000, &2, &false);
 
-    let summary = revora.get_audit_summary(&issuer, &token).unwrap();
+    let summary = revora.get_audit_summary(&issuer, &token);
     let val_total = oracle.calculate_value(&payout_asset, &summary.total_revenue);
     assert_eq!(val_total, 400_000); // 200k * $2 = $400k at current price
 }
@@ -574,11 +574,10 @@ fn cross_contract_stress_revora_with_registry_and_oracle() {
         let payout = Address::generate(&env);
 
         registry.register_token(&admin, &token);
-        revora.register_offering(&issuer, &token, &((i + 1) * 1_000), &payout);
+        revora.register_offering(&issuer, &symbol_short!("def"), &token, &((i + 1) * 1_000), &payout);
         oracle.set_price(&admin, &payout, &((i as i128 + 1) * 1_000_000), &1000);
         revora.report_revenue(
-            &issuer,
-            &token,
+            &issuer, &symbol_short!("def"), &token,
             &payout,
             &((i as i128 + 1) * 100_000),
             &1,
@@ -587,5 +586,5 @@ fn cross_contract_stress_revora_with_registry_and_oracle() {
     }
 
     assert_eq!(registry.get_token_count(), 10);
-    assert_eq!(revora.get_offering_count(&issuer), 10);
+    assert_eq!(revora.get_offering_count(&issuer, &symbol_short!("def")), 10);
 }
