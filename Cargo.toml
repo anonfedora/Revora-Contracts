@@ -17,3 +17,6 @@ ed25519-dalek = "=2.0.0"
 [features]
 default = []
 testutils = ["soroban-sdk/testutils"]
+
+[profile.release]
+overflow-checks = true

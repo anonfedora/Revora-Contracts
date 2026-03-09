@@ -81,6 +81,11 @@ Auth failures (e.g. wrong signer) are signaled by host/panic, not `RevoraError`.
 ### Call patterns and limits
 
 - **Pagination:** Use `get_offerings_page(issuer, start, limit)` with `start = 0` then `start = next_cursor` until `next_cursor` is `None`. Max page size 20. Ordering: by registration index (creation order), deterministic.
+ - **Chunked read-only queries:** For long numeric ranges or unbounded per-holder lists, prefer the chunked helpers to avoid long-running loops:
+     - `get_revenue_range_chunk(env, issuer, namespace, token, from_period, to_period, max_periods)` — sums up to `max_periods` numeric period ids in [from_period, to_period], returns `(sum, next_start)` to continue.
+     - `get_pending_periods_page(env, issuer, namespace, token, holder, start, limit)` — returns a page of pending period IDs and a `next_cursor` if more remain.
+     - `get_claimable_chunk(env, issuer, namespace, token, holder, start_idx, count)` — computes claimable amount over a bounded index window and returns a `next_cursor` when further eligible periods exist.
+     These helpers enforce reasonable caps (`MAX_PAGE_LIMIT`, `MAX_CHUNK_PERIODS`) so off-chain orchestrators should iterate using the returned cursors until exhaustion.
 - **Ordering:** `get_offerings_page` returns offerings by registration index. `get_blacklist` returns addresses in insertion order. `get_pending_periods` returns period IDs by deposit index. All query results are deterministic.
 - **Minimum revenue threshold:** Issuers can set `set_min_revenue_threshold(issuer, token, min_amount)`. When `report_revenue` is called with `amount < min_amount`, the contract emits `rev_below` and does not update revenue reports or audit summary (skipped distribution). Set to 0 to disable.
 - **Off-chain:** Prefer small page sizes and bounded blacklist sizes for predictable gas. See storage/gas tests in `src/test.rs` for stress behavior.

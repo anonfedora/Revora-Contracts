@@ -19,7 +19,7 @@ fn setup_offering(env: &Env, client: &RevoraRevenueShareClient) -> (Address, Add
     env.mock_all_auths();
     let issuer = Address::generate(env);
     let token = Address::generate(env);
-    client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &token);
+    client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &token, &0);
     (issuer, token)
 }
 
@@ -130,7 +130,7 @@ fn register_offering_missing_auth_no_mutation() {
     let issuer = Address::generate(&env);
     let token = Address::generate(&env);
     assert!(client
-        .try_register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &token)
+        .try_register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &token, &0)
         .is_err());
     assert_eq!(client.get_offering_count(&issuer, &symbol_short!("def")), 0);
 }
@@ -144,7 +144,7 @@ fn report_revenue_wrong_issuer_no_mutation() {
     assert!(client
         .try_report_revenue(&attacker, &symbol_short!("def"), &token, &token, &100, &1u64, &false)
         .is_err());
-    assert!(client.get_audit_summary(&issuer, &token).is_none());
+    assert!(client.get_audit_summary(&issuer, &symbol_short!("def"), &token).is_none());
 }
 
 #[test]
@@ -157,7 +157,7 @@ fn deposit_revenue_wrong_issuer_no_mutation() {
     assert!(client
         .try_deposit_revenue(&attacker, &symbol_short!("def"), &token, &payment_token, &100, &1u64)
         .is_err());
-    assert_eq!(client.get_period_count(&token), 0);
+    assert_eq!(client.get_period_count(&issuer, &symbol_short!("def"), &token), 0);
 }
 
 #[test]
@@ -182,7 +182,7 @@ fn set_concentration_limit_wrong_issuer_no_mutation() {
     assert!(client
         .try_set_concentration_limit(&attacker, &symbol_short!("def"), &token, &1_000u32, &true)
         .is_err());
-    assert!(client.get_concentration_limit(&issuer, &token).is_none());
+    assert!(client.get_concentration_limit(&issuer, &symbol_short!("def"), &token).is_none());
 }
 
 #[test]
@@ -192,10 +192,10 @@ fn set_rounding_mode_wrong_issuer_no_mutation() {
     let (issuer, token) = setup_offering(&env, &client);
     let attacker = Address::generate(&env);
     assert!(client
-        .try_set_rounding_mode(&attacker, &symbol_short!("def"), &token, RoundingMode::RoundHalfUp)
+        .try_set_rounding_mode(&attacker, &symbol_short!("def"), &token, &RoundingMode::RoundHalfUp)
         .is_err());
     assert_eq!(
-        client.get_rounding_mode(&issuer, &token),
+        client.get_rounding_mode(&issuer, &symbol_short!("def"), &token),
         RoundingMode::Truncation
     );
 }
@@ -209,7 +209,7 @@ fn set_min_revenue_threshold_wrong_issuer_no_mutation() {
     assert!(client
         .try_set_min_revenue_threshold(&attacker, &symbol_short!("def"), &token, &123i128)
         .is_err());
-    assert_eq!(client.get_min_revenue_threshold(&issuer, &token), 0);
+    assert_eq!(client.get_min_revenue_threshold(&issuer, &symbol_short!("def"), &token), 0);
 }
 
 #[test]
@@ -218,9 +218,7 @@ fn set_claim_delay_wrong_issuer_no_mutation() {
     let client = make_client(&env);
     let (issuer, token) = setup_offering(&env, &client);
     let attacker = Address::generate(&env);
-    assert!(client
-        .try_set_claim_delay(&attacker, &symbol_short!("def"), &token, &100u64)
-        .is_err());
+    assert!(client.try_set_claim_delay(&attacker, &symbol_short!("def"), &token, &100u64).is_err());
     assert_eq!(client.get_claim_delay(&issuer, &symbol_short!("def"), &token), 0);
 }
 
@@ -232,9 +230,9 @@ fn set_offering_metadata_wrong_issuer_no_mutation() {
     let attacker = Address::generate(&env);
     let meta: SdkString = SdkString::from_str(&env, "m");
     assert!(client
-        .try_set_offering_metadata(&attacker, &symbol_short!("def"), &token, meta)
+        .try_set_offering_metadata(&attacker, &symbol_short!("def"), &token, &meta)
         .is_err());
-    assert!(client.get_offering_metadata(&issuer, &token).is_none());
+    assert!(client.get_offering_metadata(&issuer, &symbol_short!("def"), &token).is_none());
 }
 
 #[test]
@@ -260,7 +258,7 @@ fn blacklist_remove_wrong_caller_no_mutation() {
     let issuer = Address::generate(&env);
     let token = Address::generate(&env);
     let investor = Address::generate(&env);
-    client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &token);
+    client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &token, &0);
     client.blacklist_add(&issuer, &issuer, &symbol_short!("def"), &token, &investor);
     let attacker = Address::generate(&env);
     assert!(client
@@ -279,12 +277,12 @@ fn cross_offering_confusion_wrong_issuer_no_mutation() {
     let token_a = Address::generate(&env);
     let token_b = Address::generate(&env);
     let holder = Address::generate(&env);
-    client.register_offering(&issuer_a, &symbol_short!("def"), &token_a, &1_000, &token_a);
-    client.register_offering(&issuer_b, &symbol_short!("def"), &token_b, &1_000, &token_b);
+    client.register_offering(&issuer_a, &symbol_short!("def"), &token_a, &1_000, &token_a, &0);
+    client.register_offering(&issuer_b, &symbol_short!("def"), &token_b, &1_000, &token_b, &0);
     assert!(client
-        .try_set_holder_share(&issuer_b, &token_a, &holder, &1_000u32)
+        .try_set_holder_share(&issuer_b, &symbol_short!("def"), &token_a, &holder, &1_000u32)
         .is_err());
-    assert_eq!(client.get_holder_share(&token_a, &holder), 0);
+    assert_eq!(client.get_holder_share(&issuer_a, &symbol_short!("def"), &token_a, &holder), 0);
 }
 
 #[test]
@@ -293,5 +291,6 @@ fn claim_missing_auth_no_mutation() {
     let client = make_client(&env);
     let holder = Address::generate(&env);
     let token = Address::generate(&env);
-    assert!(client.try_claim(&holder, &issuer, &symbol_short!("def"), &token).is_err());
+    let issuer = Address::generate(&env);
+    assert!(client.try_claim(&holder, &issuer, &symbol_short!("def"), &token, &0).is_err());
 }

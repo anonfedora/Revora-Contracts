@@ -1,13 +1,7 @@
 #![cfg(test)]
 
-use soroban_sdk::{
-    symbol_short,
-    testutils::Address as _,
-    Address, Env,
-};
-use crate::{
-    RevoraRevenueShare, RevoraRevenueShareClient,
-};
+use crate::{RevoraRevenueShare, RevoraRevenueShareClient};
+use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env};
 
 fn make_client(env: &Env) -> RevoraRevenueShareClient<'_> {
     let id = env.register_contract(None, RevoraRevenueShare);
@@ -42,10 +36,10 @@ fn test_namespace_isolation() {
     assert_eq!(client.get_holder_share(&issuer_b, &ns_2, &token, &holder), 1500);
 
     // We need to manage the token (mint some to the issuer)
-    // Actually, in mock_all_auths, the transfer will succeed if we don't check balances? 
+    // Actually, in mock_all_auths, the transfer will succeed if we don't check balances?
     // No, soroban-sdk mock_all_auths doesn't mock balances.
     // But we are using the `token` Address directly. We should probably use a proper token client.
-    
+
     // For simplicity in this isolation test, let's just check metadata/config which are simple set/get
     client.set_claim_delay(&issuer_a, &ns_1, &token, &3600);
     client.set_claim_delay(&issuer_b, &ns_2, &token, &7200);
@@ -72,6 +66,6 @@ fn test_same_issuer_different_namespaces() {
     client.set_snapshot_config(&issuer, &ns_1, &token, &true);
     client.set_snapshot_config(&issuer, &ns_2, &token, &false);
 
-    assert_eq!(client.get_snapshot_config(&issuer, &ns_1, &token), true);
-    assert_eq!(client.get_snapshot_config(&issuer, &ns_2, &token), false);
+    assert!(client.get_snapshot_config(&issuer, &ns_1, &token));
+    assert!(!client.get_snapshot_config(&issuer, &ns_2, &token));
 }
