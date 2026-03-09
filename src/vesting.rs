@@ -51,7 +51,8 @@ pub struct RevoraVesting;
 #[contractimpl]
 impl RevoraVesting {
     /// Initialize the vesting contract with an admin.
-    pub fn initialize(env: Env, admin: Address) -> Result<(), VestingError> {
+    /// Renamed to `initialize_vesting` to avoid symbol conflicts with other contracts.
+    pub fn initialize_vesting(env: Env, admin: Address) -> Result<(), VestingError> {
         if env.storage().persistent().has(&VestingDataKey::Admin) {
             return Err(VestingError::Unauthorized);
         }
@@ -136,11 +137,8 @@ impl RevoraVesting {
             return Err(VestingError::Unauthorized);
         }
         let key = VestingDataKey::Schedule(admin.clone(), schedule_index);
-        let mut schedule: VestingSchedule = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(VestingError::ScheduleNotFound)?;
+        let mut schedule: VestingSchedule =
+            env.storage().persistent().get(&key).ok_or(VestingError::ScheduleNotFound)?;
         if schedule.beneficiary != beneficiary {
             return Err(VestingError::ScheduleNotFound);
         }
@@ -175,14 +173,17 @@ impl RevoraVesting {
     }
 
     /// Claim vested tokens. Callable by beneficiary.
-    pub fn claim(env: Env, beneficiary: Address, admin: Address, schedule_index: u32) -> Result<i128, VestingError> {
+    /// Renamed to `claim_vesting` to avoid symbol conflicts with other contracts.
+    pub fn claim_vesting(
+        env: Env,
+        beneficiary: Address,
+        admin: Address,
+        schedule_index: u32,
+    ) -> Result<i128, VestingError> {
         beneficiary.require_auth();
         let key = VestingDataKey::Schedule(admin.clone(), schedule_index);
-        let mut schedule: VestingSchedule = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(VestingError::ScheduleNotFound)?;
+        let mut schedule: VestingSchedule =
+            env.storage().persistent().get(&key).ok_or(VestingError::ScheduleNotFound)?;
         if schedule.beneficiary != beneficiary {
             return Err(VestingError::ScheduleNotFound);
         }
@@ -218,14 +219,12 @@ impl RevoraVesting {
         schedule_index: u32,
     ) -> Result<VestingSchedule, VestingError> {
         let key = VestingDataKey::Schedule(admin, schedule_index);
-        env.storage()
-            .persistent()
-            .get(&key)
-            .ok_or(VestingError::ScheduleNotFound)
+        env.storage().persistent().get(&key).ok_or(VestingError::ScheduleNotFound)
     }
 
     /// Claimable amount for a schedule (vested minus already claimed).
-    pub fn get_claimable(
+    /// Renamed to `get_claimable_vesting` to avoid symbol conflicts with other contracts.
+    pub fn get_claimable_vesting(
         env: Env,
         admin: Address,
         schedule_index: u32,
@@ -237,9 +236,6 @@ impl RevoraVesting {
 
     /// Number of schedules created by an admin.
     pub fn get_schedule_count(env: Env, admin: Address) -> u32 {
-        env.storage()
-            .persistent()
-            .get(&VestingDataKey::ScheduleCount(admin))
-            .unwrap_or(0)
+        env.storage().persistent().get(&VestingDataKey::ScheduleCount(admin)).unwrap_or(0)
     }
 }
