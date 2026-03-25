@@ -126,6 +126,7 @@ const EVENT_PROPOSAL_EXECUTED: Symbol = symbol_short!("prop_exe");
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
+#[derive(proptest::prelude::Arbitrary)]
 pub enum ProposalAction {
     SetAdmin(Address),
     Freeze,
@@ -133,6 +134,7 @@ pub enum ProposalAction {
     AddOwner(Address),
     RemoveOwner(Address),
 }
+
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
