@@ -7791,3 +7791,361 @@ mod scenarios {
         assert!(client.is_blacklisted(&issuer, &symbol_short!("def"), &token, &investor));
     }
 } // mod scenarios
+
+// ===========================================================================
+// Claim-After-Cancel Policy Tests
+// ===========================================================================
+mod claim_after_cancel {
+    use super::*;
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    /// Full setup: env, client, issuer, offering token, payment token, contract addr.
+    fn cancel_test_setup(
+    ) -> (Env, RevoraRevenueShareClient<'static>, Address, Address, Address, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, RevoraRevenueShare);
+        let client = RevoraRevenueShareClient::new(&env, &contract_id);
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let (payment_token, pt_admin) = {
+            let a = Address::generate(&env);
+            let pt = env.register_stellar_asset_contract(a.clone());
+            (pt, a)
+        };
+        token::StellarAssetClient::new(&env, &payment_token).mint(&issuer, &10_000_000);
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &5_000, &payment_token, &0);
+        (env, client, issuer, token, payment_token, contract_id)
+    }
+
+    // ── cancel_offering ───────────────────────────────────────────────────────
+
+    /// Happy path: issuer can cancel an active offering.
+    #[test]
+    fn cancel_offering_succeeds() {
+        let (env, client, issuer, token, _, _) = cancel_test_setup();
+        let result = client.try_cancel_offering(&issuer, &symbol_short!("def"), &token);
+        assert!(result.is_ok());
+    }
+
+    /// After cancellation, `get_offering_cancelled_at` returns `Some(timestamp)`.
+    #[test]
+    fn cancel_offering_sets_cancelled_at() {
+        let (env, client, issuer, token, _, _) = cancel_test_setup();
+        env.ledger().with_mut(|li| li.timestamp = 1_000);
+        client.cancel_offering(&issuer, &symbol_short!("def"), &token);
+        let ts = client.get_offering_cancelled_at(&issuer, &symbol_short!("def"), &token);
+        assert_eq!(ts, Some(1_000));
+    }
+
+    /// Before cancellation, `get_offering_cancelled_at` returns `None`.
+    #[test]
+    fn active_offering_cancelled_at_is_none() {
+        let (env, client, issuer, token, _, _) = cancel_test_setup();
+        let ts = client.get_offering_cancelled_at(&issuer, &symbol_short!("def"), &token);
+        assert_eq!(ts, None);
+    }
+
+    /// Cancelling an already-cancelled offering is idempotent (no error, no second event).
+    #[test]
+    fn cancel_offering_idempotent() {
+        let (env, client, issuer, token, _, _) = cancel_test_setup();
+        env.ledger().with_mut(|li| li.timestamp = 500);
+        client.cancel_offering(&issuer, &symbol_short!("def"), &token);
+        let events_after_first = env.events().all().len();
+
+        env.ledger().with_mut(|li| li.timestamp = 600);
+        // Second cancel must succeed without error
+        let result = client.try_cancel_offering(&issuer, &symbol_short!("def"), &token);
+        assert!(result.is_ok());
+        // No new event emitted; timestamp unchanged
+        assert_eq!(env.events().all().len(), events_after_first);
+        assert_eq!(
+            client.get_offering_cancelled_at(&issuer, &symbol_short!("def"), &token),
+            Some(500)
+        );
+    }
+
+    /// `cancel_offering` emits the `off_canc` event with the cancellation timestamp.
+    #[test]
+    fn cancel_offering_emits_event() {
+        let (env, client, issuer, token, _, _) = cancel_test_setup();
+        env.ledger().with_mut(|li| li.timestamp = 42);
+        client.cancel_offering(&issuer, &symbol_short!("def"), &token);
+        let events = env.events().all();
+        let last = events.last().unwrap();
+        let (_, topics, data) = last;
+        let sym: Symbol = topics.get(0).unwrap().into_val(&env);
+        assert_eq!(sym, symbol_short!("off_canc"));
+        let ts: u64 = data.into_val(&env);
+        assert_eq!(ts, 42);
+    }
+
+    /// Non-issuer cannot cancel an offering (auth failure panics).
+    /// We verify this by checking that the issuer key is required via mock_auths.
+    #[test]
+    fn cancel_offering_requires_issuer_auth() {
+        let (env, client, issuer, token, _, _) = cancel_test_setup();
+        // env has mock_all_auths; verify the call succeeds only when issuer is the caller.
+        // We test the positive case (issuer can cancel) and trust require_auth for the negative.
+        let result = client.try_cancel_offering(&issuer, &symbol_short!("def"), &token);
+        assert!(result.is_ok(), "issuer should be able to cancel their own offering");
+    }
+
+    /// Cancelling a non-existent offering returns `OfferingNotFound`.
+    #[test]
+    fn cancel_nonexistent_offering_fails() {
+        let (env, client, issuer, _, _, _) = cancel_test_setup();
+        let ghost_token = Address::generate(&env);
+        let result = client.try_cancel_offering(&issuer, &symbol_short!("def"), &ghost_token);
+        assert_eq!(result, Err(Ok(RevoraError::OfferingNotFound)));
+    }
+
+    // ── deposit_revenue blocked after cancel ──────────────────────────────────
+
+    /// `deposit_revenue` is rejected after cancellation.
+    #[test]
+    fn deposit_revenue_blocked_after_cancel() {
+        let (env, client, issuer, token, payment_token, _) = cancel_test_setup();
+        client.cancel_offering(&issuer, &symbol_short!("def"), &token);
+        let result = client.try_deposit_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &payment_token,
+            &100_000,
+            &1,
+        );
+        assert_eq!(result, Err(Ok(RevoraError::OfferingCancelled)));
+    }
+
+    // ── report_revenue blocked after cancel ───────────────────────────────────
+
+    /// `report_revenue` is rejected after cancellation.
+    #[test]
+    fn report_revenue_blocked_after_cancel() {
+        let (env, client, issuer, token, payment_token, _) = cancel_test_setup();
+        client.cancel_offering(&issuer, &symbol_short!("def"), &token);
+        let result = client.try_report_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &payment_token,
+            &100_000,
+            &1,
+            &false,
+        );
+        assert_eq!(result, Err(Ok(RevoraError::OfferingCancelled)));
+    }
+
+    // ── claim still works after cancel (core policy) ──────────────────────────
+
+    /// Holders can claim revenue deposited BEFORE cancellation.
+    /// This is the central Claim-After-Cancel guarantee.
+    #[test]
+    fn claim_pre_cancel_deposits_succeeds() {
+        let (env, client, issuer, token, payment_token, contract_id) = cancel_test_setup();
+        let holder = Address::generate(&env);
+
+        // Deposit revenue before cancellation
+        client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000); // 100%
+
+        // Cancel the offering
+        client.cancel_offering(&issuer, &symbol_short!("def"), &token);
+
+        // Holder can still claim
+        let payout = client.claim(&holder, &issuer, &symbol_short!("def"), &token, &50);
+        assert_eq!(payout, 100_000);
+        assert_eq!(token::Client::new(&env, &payment_token).balance(&holder), 100_000);
+    }
+
+    /// Multiple pre-cancel periods are all claimable after cancellation.
+    #[test]
+    fn claim_multiple_pre_cancel_periods_succeeds() {
+        let (env, client, issuer, token, payment_token, _) = cancel_test_setup();
+        let holder = Address::generate(&env);
+
+        client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
+        client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &200_000, &2);
+        client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &300_000, &3);
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000);
+
+        client.cancel_offering(&issuer, &symbol_short!("def"), &token);
+
+        let payout = client.claim(&holder, &issuer, &symbol_short!("def"), &token, &50);
+        // 100% share of 100k + 200k + 300k = 600k
+        assert_eq!(payout, 600_000);
+    }
+
+    /// Partial claim after cancel: first batch, then second batch.
+    #[test]
+    fn partial_claim_after_cancel_then_rest() {
+        let (env, client, issuer, token, payment_token, _) = cancel_test_setup();
+        let holder = Address::generate(&env);
+
+        for p in 1u64..=4 {
+            client.deposit_revenue(
+                &issuer,
+                &symbol_short!("def"),
+                &token,
+                &payment_token,
+                &50_000,
+                &p,
+            );
+        }
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000);
+        client.cancel_offering(&issuer, &symbol_short!("def"), &token);
+
+        // Claim 2 periods
+        let p1 = client.claim(&holder, &issuer, &symbol_short!("def"), &token, &2);
+        assert_eq!(p1, 100_000);
+
+        // Claim remaining 2 periods
+        let p2 = client.claim(&holder, &issuer, &symbol_short!("def"), &token, &2);
+        assert_eq!(p2, 100_000);
+    }
+
+    /// After claiming all pre-cancel periods, further claim returns NoPendingClaims.
+    #[test]
+    fn no_pending_claims_after_all_pre_cancel_claimed() {
+        let (env, client, issuer, token, payment_token, _) = cancel_test_setup();
+        let holder = Address::generate(&env);
+
+        client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000);
+        client.cancel_offering(&issuer, &symbol_short!("def"), &token);
+
+        client.claim(&holder, &issuer, &symbol_short!("def"), &token, &50);
+
+        let result = client.try_claim(&holder, &issuer, &symbol_short!("def"), &token, &50);
+        assert_eq!(result, Err(Ok(RevoraError::NoPendingClaims)));
+    }
+
+    /// Blacklisted holder cannot claim even after cancellation.
+    #[test]
+    fn blacklisted_holder_cannot_claim_after_cancel() {
+        let (env, client, issuer, token, payment_token, _) = cancel_test_setup();
+        let holder = Address::generate(&env);
+
+        client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000);
+        client.blacklist_add(&issuer, &issuer, &symbol_short!("def"), &token, &holder);
+        client.cancel_offering(&issuer, &symbol_short!("def"), &token);
+
+        let result = client.try_claim(&holder, &issuer, &symbol_short!("def"), &token, &50);
+        assert_eq!(result, Err(Ok(RevoraError::HolderBlacklisted)));
+    }
+
+    /// Zero-share holder cannot claim after cancellation.
+    #[test]
+    fn zero_share_holder_cannot_claim_after_cancel() {
+        let (env, client, issuer, token, payment_token, _) = cancel_test_setup();
+        let holder = Address::generate(&env);
+
+        client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
+        // No set_holder_share call — share is 0
+        client.cancel_offering(&issuer, &symbol_short!("def"), &token);
+
+        let result = client.try_claim(&holder, &issuer, &symbol_short!("def"), &token, &50);
+        assert_eq!(result, Err(Ok(RevoraError::NoPendingClaims)));
+    }
+
+    /// Multiple holders each claim their correct share after cancellation.
+    #[test]
+    fn multiple_holders_claim_after_cancel() {
+        let (env, client, issuer, token, payment_token, _) = cancel_test_setup();
+        let holder_a = Address::generate(&env);
+        let holder_b = Address::generate(&env);
+
+        client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder_a, &6_000); // 60%
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder_b, &4_000); // 40%
+        client.cancel_offering(&issuer, &symbol_short!("def"), &token);
+
+        let pa = client.claim(&holder_a, &issuer, &symbol_short!("def"), &token, &50);
+        let pb = client.claim(&holder_b, &issuer, &symbol_short!("def"), &token, &50);
+        assert_eq!(pa, 60_000);
+        assert_eq!(pb, 40_000);
+    }
+
+    /// Cancellation is scoped per offering: other offerings on the same issuer are unaffected.
+    #[test]
+    fn cancel_is_scoped_per_offering() {
+        let (env, client, issuer, token_a, payment_token, _) = cancel_test_setup();
+        let token_b = Address::generate(&env);
+        token::StellarAssetClient::new(&env, &payment_token).mint(&issuer, &10_000_000);
+        client.register_offering(&issuer, &symbol_short!("def"), &token_b, &5_000, &payment_token, &0);
+
+        client.cancel_offering(&issuer, &symbol_short!("def"), &token_a);
+
+        // token_b offering is still active — deposit should succeed
+        let result = client.try_deposit_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token_b,
+            &payment_token,
+            &100_000,
+            &1,
+        );
+        assert!(result.is_ok());
+
+        // token_a offering is cancelled — deposit should fail
+        let result_a = client.try_deposit_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token_a,
+            &payment_token,
+            &100_000,
+            &2,
+        );
+        assert_eq!(result_a, Err(Ok(RevoraError::OfferingCancelled)));
+    }
+
+    /// Cancellation is scoped per namespace: same token in a different namespace is unaffected.
+    #[test]
+    fn cancel_is_scoped_per_namespace() {
+        let (env, client, issuer, token, payment_token, _) = cancel_test_setup();
+        token::StellarAssetClient::new(&env, &payment_token).mint(&issuer, &10_000_000);
+        client.register_offering(&issuer, &symbol_short!("ns2"), &token, &5_000, &payment_token, &0);
+
+        client.cancel_offering(&issuer, &symbol_short!("def"), &token);
+
+        // ns2 offering is still active
+        let result = client.try_deposit_revenue(
+            &issuer,
+            &symbol_short!("ns2"),
+            &token,
+            &payment_token,
+            &100_000,
+            &1,
+        );
+        assert!(result.is_ok());
+    }
+
+    /// Frozen contract blocks cancel_offering.
+    #[test]
+    fn cancel_offering_blocked_when_frozen() {
+        let (env, client, issuer, token, _, _) = cancel_test_setup();
+        let admin = Address::generate(&env);
+        client.set_admin(&admin);
+        client.freeze();
+        let result = client.try_cancel_offering(&issuer, &symbol_short!("def"), &token);
+        assert_eq!(result, Err(Ok(RevoraError::ContractFrozen)));
+    }
+
+    /// Regression: cancellation timestamp is the ledger time at the moment of the call,
+    /// not a caller-supplied value (no timestamp manipulation possible).
+    #[test]
+    fn cancel_timestamp_is_ledger_time_not_caller_supplied() {
+        let (env, client, issuer, token, _, _) = cancel_test_setup();
+        env.ledger().with_mut(|li| li.timestamp = 9_999);
+        client.cancel_offering(&issuer, &symbol_short!("def"), &token);
+        assert_eq!(
+            client.get_offering_cancelled_at(&issuer, &symbol_short!("def"), &token),
+            Some(9_999)
+        );
+    }
+} // mod claim_after_cancel

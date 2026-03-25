@@ -79,6 +79,13 @@ pub enum RevoraError {
     /// push the per-offering total above the 10 000 bps ceiling.  The caller must
     /// reduce another holder's share first, or lower the requested value.
     ShareSumExceeded = 30,
+    /// The offering has been cancelled by the issuer.
+    ///
+    /// New deposits and revenue reports are rejected after cancellation.
+    /// Holders may still claim revenue for periods deposited **before** the
+    /// cancellation timestamp; those funds remain in the contract and are
+    /// accessible via the normal `claim` flow.
+    OfferingCancelled = 31,
 }
 
 // ── Event symbols ────────────────────────────────────────────
@@ -125,6 +132,9 @@ const EVENT_SHARE_SET: Symbol = symbol_short!("share_set");
 const EVENT_SHARE_SUM_UPDATED: Symbol = symbol_short!("share_sum");
 const EVENT_FREEZE: Symbol = symbol_short!("freeze");
 const EVENT_CLAIM_DELAY_SET: Symbol = symbol_short!("delay_set");
+/// Emitted when an offering is cancelled by its issuer.
+/// Payload: `(issuer, namespace, token), cancelled_at_timestamp`.
+const EVENT_OFFERING_CANCELLED: Symbol = symbol_short!("off_canc");
 
 const EVENT_PROPOSAL_CREATED: Symbol = symbol_short!("prop_new");
 const EVENT_PROPOSAL_APPROVED: Symbol = symbol_short!("prop_app");
@@ -480,6 +490,18 @@ pub enum DataKey {
     NamespaceCount(Address),
     NamespaceItem(Address, u32),
     NamespaceRegistered(Address, Symbol),
+
+    /// Ledger timestamp at which an offering was cancelled by its issuer.
+    /// Absence means the offering is active.  Presence means cancelled; the
+    /// stored value is the `env.ledger().timestamp()` at cancellation time.
+    ///
+    /// # Claim-after-cancel semantics
+    /// When this key is present, `deposit_revenue` and `report_revenue` are
+    /// rejected with `OfferingCancelled`.  `claim` continues to work but only
+    /// pays out for periods whose `PeriodDepositTime` is **≤** this timestamp.
+    /// Periods deposited after cancellation (impossible in practice, but
+    /// defensively checked) are silently skipped.
+    OfferingCancelledAt(OfferingId),
 }
 
 /// Maximum number of offerings returned in a single page.
@@ -668,6 +690,11 @@ impl RevoraRevenueShare {
             namespace: namespace.clone(),
             token: token.clone(),
         };
+
+        // Reject deposits into cancelled offerings.
+        if Self::is_offering_cancelled_internal(env, &offering_id) {
+            return Err(RevoraError::OfferingCancelled);
+        }
 
         // Verify offering exists and payment_token matches payout_asset
         let offering =
@@ -1114,6 +1141,11 @@ impl RevoraRevenueShare {
 
             if current_issuer != issuer {
                 return Err(RevoraError::OfferingNotFound);
+            }
+
+            // Reject revenue reports on cancelled offerings.
+            if Self::is_offering_cancelled_internal(&env, &offering_id) {
+                return Err(RevoraError::OfferingCancelled);
             }
 
             let offering =
@@ -2507,6 +2539,13 @@ impl RevoraRevenueShare {
         let delay_secs: u64 = env.storage().persistent().get(&delay_key).unwrap_or(0);
         let now = env.ledger().timestamp();
 
+        // Claim-after-cancel: read the cancellation timestamp once (None = active offering).
+        // Periods deposited after this timestamp are skipped; pre-cancel periods are claimable.
+        let cancelled_at: Option<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OfferingCancelledAt(offering_id.clone()));
+
         let mut total_payout: i128 = 0;
         let mut claimed_periods = Vec::new(&env);
         let mut last_claimed_idx = start_idx;
@@ -2516,6 +2555,17 @@ impl RevoraRevenueShare {
             let period_id: u64 = env.storage().persistent().get(&entry_key).unwrap();
             let time_key = DataKey::PeriodDepositTime(offering_id.clone(), period_id);
             let deposit_time: u64 = env.storage().persistent().get(&time_key).unwrap_or(0);
+
+            // Claim-after-cancel: skip (and advance past) any period deposited after cancellation.
+            // This is a defensive guard; in practice deposit_revenue already blocks post-cancel
+            // deposits, so this branch should never be taken on a well-formed chain.
+            if let Some(ts) = cancelled_at {
+                if deposit_time > ts {
+                    last_claimed_idx = i + 1;
+                    continue;
+                }
+            }
+
             if delay_secs > 0 && now < deposit_time.saturating_add(delay_secs) {
                 break;
             }
@@ -3948,6 +3998,73 @@ impl RevoraRevenueShare {
     pub fn get_version(env: Env) -> u32 {
         let _ = env;
         CONTRACT_VERSION
+    }
+
+    // ── Claim-after-cancel policy ─────────────────────────────────────────────
+
+    /// Cancel an offering.
+    ///
+    /// Only the current issuer may call this.  After cancellation:
+    /// - `deposit_revenue` and `report_revenue` return `OfferingCancelled`.
+    /// - `claim` still works for periods deposited **before** the cancellation
+    ///   timestamp; those funds remain in the contract and are fully claimable.
+    ///
+    /// Idempotent: cancelling an already-cancelled offering is a no-op.
+    ///
+    /// # Errors
+    /// - `OfferingNotFound` — offering does not exist.
+    /// - `ContractFrozen` — contract is frozen.
+    pub fn cancel_offering(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+    ) -> Result<(), RevoraError> {
+        Self::require_not_frozen(&env)?;
+
+        let current_issuer =
+            Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
+                .ok_or(RevoraError::OfferingNotFound)?;
+        current_issuer.require_auth();
+
+        let offering_id = OfferingId {
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+        };
+        let cancel_key = DataKey::OfferingCancelledAt(offering_id.clone());
+
+        // Idempotent: already cancelled → no-op.
+        if env.storage().persistent().has(&cancel_key) {
+            return Ok(());
+        }
+
+        let cancelled_at = env.ledger().timestamp();
+        env.storage().persistent().set(&cancel_key, &cancelled_at);
+
+        env.events().publish(
+            (EVENT_OFFERING_CANCELLED, issuer, namespace, token),
+            cancelled_at,
+        );
+        Ok(())
+    }
+
+    /// Return `true` if the offering has been cancelled.
+    /// Private helper — callers outside the contract use `get_offering_cancelled_at().is_some()`.
+    fn is_offering_cancelled_internal(env: &Env, offering_id: &OfferingId) -> bool {
+        env.storage().persistent().has(&DataKey::OfferingCancelledAt(offering_id.clone()))
+    }
+
+    /// Return the ledger timestamp at which the offering was cancelled, or `None` if active.
+    /// Use `.is_some()` to check whether an offering is cancelled.
+    pub fn get_offering_cancelled_at(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+    ) -> Option<u64> {
+        let offering_id = OfferingId { issuer, namespace, token };
+        env.storage().persistent().get(&DataKey::OfferingCancelledAt(offering_id))
     }
 }
 
