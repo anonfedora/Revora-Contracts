@@ -2310,6 +2310,88 @@ fn set_concentration_limit_stores_config() {
 }
 
 #[test]
+fn set_concentration_limit_bounds_check() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let payout_asset = Address::generate(&env);
+    client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
+    
+    let res = client.try_set_concentration_limit(&issuer, &symbol_short!("def"), &token, &10001, &false);
+    assert!(res.is_err());
+}
+
+#[test]
+fn report_concentration_bounds_check() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let payout_asset = Address::generate(&env);
+    client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
+    
+    let res = client.try_report_concentration(&issuer, &symbol_short!("def"), &token, &10001);
+    assert!(res.is_err());
+}
+
+#[test]
+fn set_concentration_limit_respects_pause() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, RevoraRevenueShare);
+    let client = RevoraRevenueShareClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let issuer = admin.clone();
+    let token = Address::generate(&env);
+    let payout_asset = Address::generate(&env);
+    client.initialize(&admin, &None, &None::<bool>);
+    client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
+    
+    client.pause_admin(&admin);
+    let res = client.try_set_concentration_limit(&issuer, &symbol_short!("def"), &token, &5000, &false);
+    assert!(res.is_err());
+}
+
+#[test]
+fn report_concentration_respects_pause() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, RevoraRevenueShare);
+    let client = RevoraRevenueShareClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let issuer = admin.clone();
+    let token = Address::generate(&env);
+    let payout_asset = Address::generate(&env);
+    client.initialize(&admin, &None, &None::<bool>);
+    client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
+    
+    client.pause_admin(&admin);
+    let res = client.try_report_concentration(&issuer, &symbol_short!("def"), &token, &5000);
+    assert!(res.is_err());
+}
+
+#[test]
+fn report_concentration_emits_audit_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, RevoraRevenueShare);
+    let client = RevoraRevenueShareClient::new(&env, &contract_id);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let payout_asset = Address::generate(&env);
+    client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
+    
+    let before = env.events().all().len();
+    client.report_concentration(&issuer, &symbol_short!("def"), &token, &3000);
+    
+    let events = env.events().all();
+    assert!(events.len() > before);
+}
+
+#[test]
 fn report_concentration_emits_warning_when_over_limit() {
     let env = Env::default();
     env.mock_all_auths();
@@ -6443,8 +6525,6 @@ fn test_metadata_set_emits_event() {
     let last_event = events.last().unwrap();
     let (_, topics, _) = last_event;
     let topics_vec: Vec<soroban_sdk::Val> = topics;
-    let event_symbol: Symbol = topics_vec.get(0).clone().unwrap().into_val(&env);
-    let topics_vec = topics;
     let event_symbol: Symbol = topics_vec.get(0).unwrap().into_val(&env);
     assert_eq!(event_symbol, symbol_short!("meta_set"));
 }
@@ -6474,8 +6554,6 @@ fn test_metadata_update_emits_event() {
     let last_event = events.last().unwrap();
     let (_, topics, _) = last_event;
     let topics_vec: Vec<soroban_sdk::Val> = topics;
-    let event_symbol: Symbol = topics_vec.get(0).clone().unwrap().into_val(&env);
-    let topics_vec = topics;
     let event_symbol: Symbol = topics_vec.get(0).unwrap().into_val(&env);
     assert_eq!(event_symbol, symbol_short!("meta_upd"));
 }
@@ -6500,8 +6578,6 @@ fn test_metadata_events_include_correct_data() {
     assert_eq!(event_contract, contract_id);
 
     let topics_vec: Vec<soroban_sdk::Val> = topics;
-    let event_symbol: Symbol = topics_vec.get(0).clone().unwrap().into_val(&env);
-    let topics_vec = topics;
     let event_symbol: Symbol = topics_vec.get(0).unwrap().into_val(&env);
     assert_eq!(event_symbol, symbol_short!("meta_set"));
 
@@ -6985,44 +7061,7 @@ mod regression {
         assert!(env.events().all().len() > before);
     }
 
-#[test]
-fn report_below_threshold_emits_event_and_skips_distribution() {
-    let (env, client, issuer, token, payout_asset) = setup_with_offering();
-    client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &10_000);
-    let events_before = env.events().all().len();
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &1_000, &1, &false);
-    let events_after = env.events().all().len();
-    assert!(events_after > events_before, "should emit rev_below event");
-    let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
-    assert!(
-        summary.is_none() || summary.as_ref().clone().unwrap().report_count == 0,
-        "below-threshold report must not count toward audit"
-    );
-}
 
-#[test]
-fn report_at_or_above_threshold_updates_state() {
-    let (_env, client, issuer, token, payout_asset) = setup_with_offering();
-    client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &1_000);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &1_000, &1, &false);
-    let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
-    assert_eq!(summary.clone().unwrap().report_count, 1);
-    assert_eq!(summary.clone().unwrap().total_revenue, 1_000);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &2_000, &2, &false);
-    let summary2 = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
-    assert_eq!(summary2.report_count, 2);
-    assert_eq!(summary2.total_revenue, 3_000);
-}
-
-#[test]
-fn zero_threshold_disables_check() {
-    let (_env, client, issuer, token, payout_asset) = setup_with_offering();
-    client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &100);
-    client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &0);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &50, &1, &false);
-    let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
-    assert_eq!(summary.clone().unwrap().report_count, 1);
-}
     #[test]
     fn report_below_threshold_emits_event_and_skips_distribution() {
         let (env, client, issuer, token, payout_asset) = setup_with_offering();
@@ -7108,28 +7147,7 @@ fn zero_threshold_disables_check() {
     // Deterministic ordering for query results (#38)
     // ---------------------------------------------------------------------------
 
-#[test]
-fn get_offerings_page_order_is_by_registration_index() {
-    let (env, client, issuer) = setup();
-    let t0 = Address::generate(&env);
-    let t1 = Address::generate(&env);
-    let t2 = Address::generate(&env);
-    let t3 = Address::generate(&env);
-    let p0 = Address::generate(&env);
-    let p1 = Address::generate(&env);
-    let p2 = Address::generate(&env);
-    let p3 = Address::generate(&env);
-    client.register_offering(&issuer, &symbol_short!("def"), &t0, &100, &p0, &0);
-    client.register_offering(&issuer, &symbol_short!("def"), &t1, &200, &p1, &0);
-    client.register_offering(&issuer, &symbol_short!("def"), &t2, &300, &p2, &0);
-    client.register_offering(&issuer, &symbol_short!("def"), &t3, &400, &p3, &0);
-    let (page, _) = client.get_offerings_page(&issuer, &symbol_short!("def"), &0, &10);
-    assert_eq!(page.len(), 4);
-    assert_eq!(page.get(0).clone().unwrap().token, t0);
-    assert_eq!(page.get(1).clone().unwrap().token, t1);
-    assert_eq!(page.get(2).clone().unwrap().token, t2);
-    assert_eq!(page.get(3).clone().unwrap().token, t3);
-}
+
     #[test]
     fn get_offerings_page_order_is_by_registration_index() {
         let (env, client, issuer) = setup();
@@ -7985,8 +8003,8 @@ mod scenarios {
         client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &1_000_000, &1, &false);
 
         // 3. Investors set their shares for period 1 (Total supply 100)
-        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &1, &investor_a, &60); // 60%
-        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &1, &investor_b, &40); // 40%
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_a, &60); // 60%
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_b, &40); // 40%
 
         // 4. Report revenue for period 2
         // total_revenue = 2,000,000
@@ -7994,8 +8012,8 @@ mod scenarios {
         client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &2_000_000, &2, &false);
 
         // 5. Investors' shares shift for period 2
-        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &2, &investor_a, &20); // 20%
-        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &2, &investor_b, &80); // 80%
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_a, &20); // 20%
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_b, &80); // 80%
 
         // 6. Investor A claims all available periods (1 and 2)
         // expected_payout_a_p1 = 500,000 * 60 / 100 = 300,000
@@ -8003,7 +8021,7 @@ mod scenarios {
         // total = 500,000
         let claimable_a = client.get_claimable(&issuer, &symbol_short!("def"), &token, &investor_a);
         assert_eq!(claimable_a, 500_000);
-        let payout_a = client.claim(&issuer, &symbol_short!("def"), &token, &investor_a, &0);
+        let payout_a = client.claim(&investor_a, &issuer, &symbol_short!("def"), &token, &0);
         assert_eq!(payout_a, 500_000);
 
         // 7. Investor B claims all available periods
@@ -8012,11 +8030,11 @@ mod scenarios {
         // total = 1,000,000
         let claimable_b = client.get_claimable(&issuer, &symbol_short!("def"), &token, &investor_b);
         assert_eq!(claimable_b, 1_000_000);
-        let payout_b = client.claim(&issuer, &symbol_short!("def"), &token, &investor_b, &0);
+        let payout_b = client.claim(&investor_b, &issuer, &symbol_short!("def"), &token, &0);
         assert_eq!(payout_b, 1_000_000);
 
         // Verify no pending claims
-        let remaining_a = client.get_unclaimed_periods(&issuer, &symbol_short!("def"), &token, &investor_a);
+        let remaining_a = client.get_pending_periods(&issuer, &symbol_short!("def"), &token, &investor_a);
         assert!(remaining_a.is_empty());
         let claimable_b_after = client.get_claimable(&issuer, &symbol_short!("def"), &token, &investor_b);
         assert_eq!(claimable_b_after, 0);
@@ -8049,16 +8067,16 @@ mod scenarios {
         client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &100_000, &1, &false);
 
         // 4. Investor is assigned 100% share for period 1
-        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &1, &investor, &100);
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor, &100);
 
         // 5. Investor tries to claim but delay has not elapsed
         let claim_preview = client.get_claimable(&issuer, &symbol_short!("def"), &token, &investor);
         assert_eq!(claim_preview, 0); // Preview returns 0 since delay hasn't passed
-        let claim_res = client.try_claim(&issuer, &symbol_short!("def"), &token, &investor, &0);
+        let claim_res = client.try_claim(&investor, &issuer, &symbol_short!("def"), &token, &0);
         assert!(claim_res.is_err(), "Claim should fail due to delay not elapsed");
 
         // 6. Fast forward time by 2 days
-        env.ledger().set_timestamp(env.ledger().timestamp() + 2 * 86400);
+        env.ledger().with_mut(|li| li.timestamp += 2 * 86400);
 
         // 7. Issuer corrects the revenue report for period 1 via override (changes to 50_000)
         client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &50_000, &1, &true);
@@ -8067,7 +8085,7 @@ mod scenarios {
         let claim_preview_after = client.get_claimable(&issuer, &symbol_short!("def"), &token, &investor);
         assert_eq!(claim_preview_after, 50_000, "Preview should reflect overridden amount and passed delay");
         
-        let payout = client.claim(&issuer, &symbol_short!("def"), &token, &investor, &0);
+        let payout = client.claim(&investor, &issuer, &symbol_short!("def"), &token, &0);
         assert_eq!(payout, 50_000);
 
         // 9. Issuer blacklists investor to prevent future claims
@@ -8075,13 +8093,12 @@ mod scenarios {
 
         // 10. Issuer reports revenue for period 2
         client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &200_000, &2, &false);
-        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &2, &investor, &100);
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor, &100);
 
         // 11. Investor attempts claim but is blocked by blacklist
-        env.ledger().set_timestamp(env.ledger().timestamp() + 2 * 86400); // pass delay
-        let claim_res_blocked = client.try_claim(&issuer, &symbol_short!("def"), &token, &investor, &0);
+        env.ledger().with_mut(|li| li.timestamp += 2 * 86400); // pass delay
+        let claim_res_blocked = client.try_claim(&investor, &issuer, &symbol_short!("def"), &token, &0);
         assert!(claim_res_blocked.is_err(), "Claim should fail due to blacklist");
     }
 }
-} // mod regression
 

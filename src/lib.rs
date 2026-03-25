@@ -73,6 +73,8 @@ pub enum RevoraError {
     SignatureReplay = 28,
     /// Off-chain signer key has not been registered.
     SignerKeyNotRegistered = 29,
+    /// Contract is paused; state-mutating operations are temporarily disabled.
+    ContractPaused = 30,
 }
 
 // ── Event symbols ────────────────────────────────────────────
@@ -110,6 +112,7 @@ const EVENT_REV_REPA_V1: Symbol = symbol_short!("rv_repa1");
 
 const EVENT_SCHEMA_VERSION: u32 = 1;
 const EVENT_CONCENTRATION_WARNING: Symbol = symbol_short!("conc_warn");
+const EVENT_CONCENTRATION_REPORTED: Symbol = symbol_short!("conc_rep");
 const EVENT_REV_DEPOSIT: Symbol = symbol_short!("rev_dep");
 const EVENT_REV_DEP_SNAP: Symbol = symbol_short!("rev_snap");
 const EVENT_CLAIM: Symbol = symbol_short!("claim");
@@ -1274,17 +1277,6 @@ impl RevoraRevenueShare {
             (EVENT_REVENUE_REPORTED_ASSET, issuer.clone(), namespace.clone(), token.clone()),
             (payout_asset.clone(), amount, period_id),
         );
-
-        // Audit log summary (#34): maintain per-offering total revenue and report count
-        let summary_key = DataKey::AuditSummary(offering_id.clone());
-        let mut summary: AuditSummary = env
-            .storage()
-            .persistent()
-            .get(&summary_key)
-            .unwrap_or(AuditSummary { total_revenue: 0, report_count: 0 });
-        summary.total_revenue = summary.total_revenue.saturating_add(amount);
-        summary.report_count = summary.report_count.saturating_add(1);
-        env.storage().persistent().set(&summary_key, &summary);
         // Optionally emit versioned v1 events for forward-compatible consumers
         if Self::is_event_versioning_enabled(env.clone()) {
             env.events().publish(
@@ -1763,6 +1755,13 @@ impl RevoraRevenueShare {
         enforce: bool,
     ) -> Result<(), RevoraError> {
         Self::require_not_frozen(&env)?;
+        if env.storage().persistent().get::<DataKey, bool>(&DataKey::Paused).unwrap_or(false) {
+            return Err(RevoraError::ContractPaused);
+        }
+
+        if max_bps > 10_000 {
+            return Err(RevoraError::InvalidShareBps);
+        }
 
         // Verify offering exists and issuer is current
         let offering_id = OfferingId {
@@ -1807,7 +1806,14 @@ impl RevoraRevenueShare {
         concentration_bps: u32,
     ) -> Result<(), RevoraError> {
         Self::require_not_frozen(&env)?;
+        if env.storage().persistent().get::<DataKey, bool>(&DataKey::Paused).unwrap_or(false) {
+            return Err(RevoraError::ContractPaused);
+        }
         issuer.require_auth();
+
+        if concentration_bps > 10_000 {
+            return Err(RevoraError::InvalidShareBps);
+        }
         let offering_id = OfferingId {
             issuer: issuer.clone(),
             namespace: namespace.clone(),
@@ -1834,10 +1840,17 @@ impl RevoraRevenueShare {
         {
             if config.max_bps > 0 && concentration_bps > config.max_bps {
                 env.events().publish(
-                    (EVENT_CONCENTRATION_WARNING, issuer, namespace, token),
+                    (EVENT_CONCENTRATION_WARNING, issuer.clone(), namespace.clone(), token.clone()),
                     (concentration_bps, config.max_bps),
                 );
             }
+        }
+        
+        if !Self::is_event_only(&env) {
+            env.events().publish(
+                (EVENT_CONCENTRATION_REPORTED, issuer, namespace, token),
+                concentration_bps,
+            );
         }
         Ok(())
     }
@@ -3992,9 +4005,13 @@ mod vesting_test;
 
 #[cfg(test)]
 mod test_utils;
-
+#[cfg(test)]
 mod chunking_tests;
+#[cfg(test)]
 mod test;
+#[cfg(test)]
 mod test_auth;
+#[cfg(test)]
 mod test_cross_contract;
+#[cfg(test)]
 mod test_namespaces;
