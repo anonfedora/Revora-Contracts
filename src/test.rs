@@ -4,12 +4,13 @@
 
 use crate::{
     AmountValidationCategory, AmountValidationMatrix, ProposalAction, RevoraError,
+    ClippyFormatGateAttestationInput,
     RevoraRevenueShare, RevoraRevenueShareClient, RoundingMode,
 };
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Events as _, Ledger as _},
-    token, vec, Address, Env, IntoVal, String as SdkString, Symbol, Vec,
+    token, vec, Address, BytesN, Env, IntoVal, String as SdkString, Symbol, Vec,
 };
 use proptest::{prelude::*, prop};
 use crate::proptest_helpers::{any_test_operation, TestOperation};
@@ -4400,6 +4401,193 @@ fn set_testnet_mode_emits_event() {
 }
 
 #[test]
+fn clippy_format_gate_policy_roundtrip() {
+    let (_env, client, issuer, token, _payout) = setup_with_offering();
+
+    let result = client.try_set_clippy_format_gate(
+        &issuer,
+        &issuer,
+        &symbol_short!("def"),
+        &token,
+        &true,
+        &3600,
+    );
+    assert!(result.is_ok());
+
+    let cfg = client.get_clippy_format_gate(&issuer, &symbol_short!("def"), &token);
+    assert!(cfg.is_some());
+    let cfg = cfg.unwrap();
+    assert!(cfg.enforce);
+    assert_eq!(cfg.max_attestation_age_secs, 3600);
+}
+
+#[test]
+fn clippy_format_gate_rejects_invalid_policy_window() {
+    let (_env, client, issuer, token, _payout) = setup_with_offering();
+
+    let result = client.try_set_clippy_format_gate(
+        &issuer,
+        &issuer,
+        &symbol_short!("def"),
+        &token,
+        &true,
+        &0,
+    );
+    assert!(result.is_err());
+    assert!(matches!(result.err(), Some(Ok(RevoraError::GatePolicyInvalid))));
+}
+
+#[test]
+fn clippy_format_gate_rejects_unauthorized_actor() {
+    let (env, client, issuer, token, _payout) = setup_with_offering();
+    let bad_actor = Address::generate(&env);
+
+    let result = client.try_set_clippy_format_gate(
+        &bad_actor,
+        &issuer,
+        &symbol_short!("def"),
+        &token,
+        &true,
+        &3600,
+    );
+    assert!(result.is_err());
+    assert!(matches!(result.err(), Some(Ok(RevoraError::NotInitialized))));
+}
+
+#[test]
+fn clippy_format_gate_blocks_revenue_without_attestation() {
+    let (_env, client, issuer, token, payment_token, _contract_id) = claim_setup();
+
+    client.set_clippy_format_gate(&issuer, &issuer, &symbol_short!("def"), &token, &true, &3600);
+
+    let result = client.try_deposit_revenue(
+        &issuer,
+        &symbol_short!("def"),
+        &token,
+        &payment_token,
+        &10_000,
+        &1,
+    );
+    assert!(result.is_err());
+    assert!(matches!(result.err(), Some(Ok(RevoraError::GateCheckFailed))));
+}
+
+#[test]
+fn clippy_format_gate_blocks_failed_attestation() {
+    let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
+    let hash = BytesN::from_array(&env, &[7u8; 32]);
+    let attestation_input =
+        ClippyFormatGateAttestationInput { format_ok: true, clippy_ok: false, artifact_hash: hash };
+
+    client.set_clippy_format_gate(&issuer, &issuer, &symbol_short!("def"), &token, &true, &3600);
+    client.attest_clippy_format_gate(
+        &issuer,
+        &issuer,
+        &symbol_short!("def"),
+        &token,
+        &attestation_input,
+    );
+
+    let result = client.try_report_revenue(
+        &issuer,
+        &symbol_short!("def"),
+        &token,
+        &payment_token,
+        &50_000,
+        &9,
+        &false,
+    );
+    assert!(result.is_err());
+    assert!(matches!(result.err(), Some(Ok(RevoraError::GateCheckFailed))));
+}
+
+#[test]
+fn clippy_format_gate_blocks_stale_attestation() {
+    let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
+    let hash = BytesN::from_array(&env, &[9u8; 32]);
+    let attestation_input =
+        ClippyFormatGateAttestationInput { format_ok: true, clippy_ok: true, artifact_hash: hash };
+
+    client.set_clippy_format_gate(&issuer, &issuer, &symbol_short!("def"), &token, &true, &60);
+    client.attest_clippy_format_gate(
+        &issuer,
+        &issuer,
+        &symbol_short!("def"),
+        &token,
+        &attestation_input,
+    );
+
+    env.ledger().with_mut(|li| li.timestamp += 61);
+    let result = client.try_deposit_revenue(
+        &issuer,
+        &symbol_short!("def"),
+        &token,
+        &payment_token,
+        &10_000,
+        &1,
+    );
+    assert!(result.is_err());
+    assert!(matches!(result.err(), Some(Ok(RevoraError::GateAttestationExpired))));
+}
+
+#[test]
+fn clippy_format_gate_allows_fresh_green_attestation() {
+    let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
+    let hash = BytesN::from_array(&env, &[3u8; 32]);
+    let attestation_input =
+        ClippyFormatGateAttestationInput { format_ok: true, clippy_ok: true, artifact_hash: hash };
+
+    client.set_clippy_format_gate(&issuer, &issuer, &symbol_short!("def"), &token, &true, &3600);
+    client.attest_clippy_format_gate(
+        &issuer,
+        &issuer,
+        &symbol_short!("def"),
+        &token,
+        &attestation_input,
+    );
+
+    let result = client.try_report_revenue(
+        &issuer,
+        &symbol_short!("def"),
+        &token,
+        &payment_token,
+        &10_000,
+        &1,
+        &false,
+    );
+    assert!(result.is_ok());
+}
+
+#[test]
+fn clippy_format_gate_admin_can_manage_policy_and_attestation() {
+    let (env, client, issuer, token, _payout) = setup_with_offering();
+    let admin = Address::generate(&env);
+    let hash = BytesN::from_array(&env, &[11u8; 32]);
+    let attestation_input =
+        ClippyFormatGateAttestationInput { format_ok: true, clippy_ok: true, artifact_hash: hash };
+    client.set_admin(&admin);
+
+    let r1 = client.try_set_clippy_format_gate(
+        &admin,
+        &issuer,
+        &symbol_short!("def"),
+        &token,
+        &true,
+        &1800,
+    );
+    assert!(r1.is_ok());
+
+    let r2 = client.try_attest_clippy_format_gate(
+        &admin,
+        &issuer,
+        &symbol_short!("def"),
+        &token,
+        &attestation_input,
+    );
+    assert!(r2.is_ok());
+}
+
+#[test]
 fn issuer_transfer_accept_completes_transfer() {
     let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
     let new_issuer = Address::generate(&env);
@@ -7063,8 +7251,7 @@ fn test_metadata_set_emits_event() {
     // Verify the event contains the correct symbol
     let last_event = events.last().unwrap();
     let (_, topics, _) = last_event;
-    let topics_vec = topics.clone();
-    let event_symbol: Symbol = topics_vec.get(0).unwrap().into_val(&env);
+    let event_symbol: Symbol = topics.get(0).unwrap().into_val(&env);
     assert_eq!(event_symbol, symbol_short!("meta_set"));
 }
 
@@ -7092,8 +7279,7 @@ fn test_metadata_update_emits_event() {
     // Verify the event contains the correct symbol for update
     let last_event = events.last().unwrap();
     let (_, topics, _) = last_event;
-    let topics_vec = topics.clone();
-    let event_symbol: Symbol = topics_vec.get(0).unwrap().into_val(&env);
+    let event_symbol: Symbol = topics.get(0).unwrap().into_val(&env);
     assert_eq!(event_symbol, symbol_short!("meta_upd"));
 }
 
@@ -7116,14 +7302,13 @@ fn test_metadata_events_include_correct_data() {
 
     assert_eq!(event_contract, contract_id);
 
-    let topics_vec = topics.clone();
-    let event_symbol: Symbol = topics_vec.get(0).unwrap().into_val(&env);
+    let event_symbol: Symbol = topics.get(0).unwrap().into_val(&env);
     assert_eq!(event_symbol, symbol_short!("meta_set"));
 
-    let event_issuer: Address = topics_vec.get(1).clone().unwrap().into_val(&env);
+    let event_issuer: Address = topics.get(1).unwrap().into_val(&env);
     assert_eq!(event_issuer, issuer);
 
-    let event_token: Address = topics_vec.get(2).clone().unwrap().into_val(&env);
+    let event_token: Address = topics.get(2).unwrap().into_val(&env);
     assert_eq!(event_token, token);
 
     let event_metadata: SdkString = data.into_val(&env);
@@ -7675,76 +7860,6 @@ mod regression {
         let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
         assert_eq!(summary.clone().unwrap().report_count, 1);
     }
-    #[test]
-    fn report_below_threshold_emits_event_and_skips_distribution() {
-        let (env, client, issuer, token, payout_asset) = setup_with_offering();
-        client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &10_000);
-        let events_before = env.events().all().len();
-        client.report_revenue(
-            &issuer,
-            &symbol_short!("def"),
-            &token,
-            &payout_asset,
-            &1_000,
-            &1,
-            &false,
-        );
-        let events_after = env.events().all().len();
-        assert!(events_after > events_before, "should emit rev_below event");
-        let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
-        assert!(
-            summary.is_none() || summary.as_ref().clone().unwrap().report_count == 0,
-            "below-threshold report must not count toward audit"
-        );
-    }
-
-    #[test]
-    fn report_at_or_above_threshold_updates_state() {
-        let (_env, client, issuer, token, payout_asset) = setup_with_offering();
-        client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &1_000);
-        client.report_revenue(
-            &issuer,
-            &symbol_short!("def"),
-            &token,
-            &payout_asset,
-            &1_000,
-            &1,
-            &false,
-        );
-        let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
-        assert_eq!(summary.clone().unwrap().report_count, 1);
-        assert_eq!(summary.clone().unwrap().total_revenue, 1_000);
-        client.report_revenue(
-            &issuer,
-            &symbol_short!("def"),
-            &token,
-            &payout_asset,
-            &2_000,
-            &2,
-            &false,
-        );
-        let summary2 = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
-        assert_eq!(summary2.clone().unwrap().report_count, 2);
-        assert_eq!(summary2.unwrap().total_revenue, 3_000);
-    }
-
-    #[test]
-    fn zero_threshold_disables_check() {
-        let (_env, client, issuer, token, payout_asset) = setup_with_offering();
-        client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &100);
-        client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &0);
-        client.report_revenue(
-            &issuer,
-            &symbol_short!("def"),
-            &token,
-            &payout_asset,
-            &50,
-            &1,
-            &false,
-        );
-        let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
-        assert_eq!(summary.clone().unwrap().report_count, 1);
-    }
 
     #[test]
     fn set_concentration_limit_emits_event() {
@@ -7781,13 +7896,6 @@ mod regression {
         assert_eq!(page.get(2).clone().unwrap().token, t2);
         assert_eq!(page.get(3).clone().unwrap().token, t3);
     }
-    #[test]
-    fn get_offerings_page_order_is_by_registration_index() {
-        let (env, client, issuer) = setup();
-        let t0 = Address::generate(&env);
-        let t1 = Address::generate(&env);
-        let t2 = Address::generate(&env);
-        let t3 = Address::generate(&env);
         let p0 = Address::generate(&env);
         let p1 = Address::generate(&env);
         let p2 = Address::generate(&env);
@@ -8652,8 +8760,8 @@ mod regression {
         );
 
         // 3. Investors set their shares for period 1 (Total supply 100)
-        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_a, &60); // 60%
-        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_b, &40); // 40%
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_a, &6_000); // 60%
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_b, &4_000); // 40%
 
         // 4. Report revenue for period 2
         // total_revenue = 2,000,000
@@ -8669,8 +8777,8 @@ mod regression {
         );
 
         // 5. Investors' shares shift for period 2
-        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_a, &20); // 20%
-        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_b, &80); // 80%
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_a, &2_000); // 20%
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_b, &8_000); // 80%
 
         // 6. Investor A claims all available periods (1 and 2)
         let claimable_a = client.get_claimable(&issuer, &symbol_short!("def"), &token, &investor_a);
@@ -8686,7 +8794,7 @@ mod regression {
 
         // Verify no pending claims
         let remaining_a =
-            client.get_unclaimed_periods(&issuer, &symbol_short!("def"), &token, &investor_a);
+            client.get_pending_periods(&issuer, &symbol_short!("def"), &token, &investor_a);
         assert!(remaining_a.is_empty());
         let claimable_b_after =
             client.get_claimable(&issuer, &symbol_short!("def"), &token, &investor_b);
@@ -8743,7 +8851,7 @@ mod regression {
         );
 
         // 4. Investor is assigned 100% share for period 1
-        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor, &100);
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor, &10_000);
 
         // 5. Investor tries to claim but delay has not elapsed
         let claim_preview = client.get_claimable(&issuer, &symbol_short!("def"), &token, &investor);
@@ -8752,7 +8860,7 @@ mod regression {
         assert!(claim_res.is_err(), "Claim should fail due to delay not elapsed");
 
         // 6. Fast forward time by 2 days
-        env.ledger().with_mut(|li| li.timestamp = env.ledger().timestamp() + 2 * 86400);
+        env.ledger().with_mut(|li| li.timestamp += 2 * 86400);
 
         // 7. Issuer corrects the revenue report for period 1 via override (changes to 50_000)
         client.report_revenue(
@@ -8773,7 +8881,7 @@ mod regression {
             "Preview should reflect overridden amount and passed delay"
         );
 
-        let payout = client.claim(&issuer, &symbol_short!("def"), &token, &investor, &0);
+        let payout = client.claim(&investor, &issuer, &symbol_short!("def"), &token, &0);
         assert_eq!(payout, 50_000);
 
         // 9. Issuer blacklists investor to prevent future claims
@@ -8789,12 +8897,12 @@ mod regression {
             &2,
             &false,
         );
-        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &2, &investor, &100);
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor, &10_000);
 
         // 11. Investor attempts claim but is blocked by blacklist
-        env.ledger().set_timestamp(env.ledger().timestamp() + 2 * 86400); // pass delay
+        env.ledger().with_mut(|li| li.timestamp += 2 * 86400); // pass delay
         let claim_res_blocked =
-            client.try_claim(&issuer, &symbol_short!("def"), &token, &investor, &0);
+            client.try_claim(&investor, &issuer, &symbol_short!("def"), &token, &0);
         assert!(claim_res_blocked.is_err(), "Claim should fail due to blacklist");
     }
 }

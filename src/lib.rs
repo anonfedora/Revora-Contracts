@@ -78,6 +78,12 @@ pub enum RevoraError {
     SignerKeyNotRegistered = 29,
     /// Cross-contract token transfer failed.
     TransferFailed = 30,
+    /// Clippy/format gate policy is invalid.
+    GatePolicyInvalid = 31,
+    /// Clippy/format attestation is expired or from the future.
+    GateAttestationExpired = 32,
+    /// Clippy/format gate requirements are not satisfied.
+    GateCheckFailed = 33,
 }
 
 // ── Event symbols ────────────────────────────────────────────
@@ -189,6 +195,8 @@ const EVENT_META_SHARE_SET: Symbol = symbol_short!("meta_shr");
 const EVENT_META_REV_APPROVE: Symbol = symbol_short!("meta_rev");
 /// Emitted when `repair_audit_summary` writes a corrected `AuditSummary` to storage.
 const EVENT_AUDIT_REPAIRED: Symbol = symbol_short!("aud_rep");
+const EVENT_GATE_CONFIG_SET: Symbol = symbol_short!("gate_cfg");
+const EVENT_GATE_ATTESTED: Symbol = symbol_short!("gate_att");
 
 /// Current schema for `EVENT_INDEXED_V2` topics.
 const INDEXER_EVENT_SCHEMA_VERSION: u32 = 2;
@@ -265,6 +273,17 @@ pub struct AuditSummary {
     pub total_revenue: i128,
     /// Total number of revenue reports submitted.
     pub report_count: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AuditReconciliationResult {
+    pub stored_total_revenue: i128,
+    pub stored_report_count: u64,
+    pub computed_total_revenue: i128,
+    pub computed_report_count: u64,
+    pub is_consistent: bool,
+    pub is_saturated: bool,
 }
 
 /// Pending issuer transfer details including expiry tracking.
@@ -355,6 +374,39 @@ pub struct MetaRevenueApprovalPayload {
 pub struct AccessWindow {
     pub start_timestamp: u64,
     pub end_timestamp: u64,
+}
+
+/// Per-offering policy for clippy/format gate enforcement.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClippyFormatGateConfig {
+    /// If true, state-changing revenue flows require a fresh green attestation.
+    pub enforce: bool,
+    /// Maximum attestation age in seconds.
+    pub max_attestation_age_secs: u64,
+}
+
+/// Per-offering attestation proving recent format and clippy pass status.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClippyFormatGateAttestation {
+    /// Ledger timestamp when attestation was recorded.
+    pub attested_at: u64,
+    /// True when formatter gate passed.
+    pub format_ok: bool,
+    /// True when clippy gate passed.
+    pub clippy_ok: bool,
+    /// 32-byte artifact hash tying attestation to a build/test artifact.
+    pub artifact_hash: BytesN<32>,
+}
+
+/// Payload for recording a clippy/format gate attestation.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClippyFormatGateAttestationInput {
+    pub format_ok: bool,
+    pub clippy_ok: bool,
+    pub artifact_hash: BytesN<32>,
 }
 
 #[contracttype]
@@ -508,6 +560,10 @@ pub enum DataKey {
 
     /// Metadata reference (IPFS hash, HTTPS URI, etc.) for an offering.
     OfferingMetadata(OfferingId),
+    /// Per-offering clippy/format gate policy.
+    ClippyFormatGateConfig(OfferingId),
+    /// Per-offering clippy/format gate attestation.
+    ClippyFormatGateAttestation(OfferingId),
     /// Platform fee in basis points (max 5000 = 50%) taken from reported revenue (#6).
     PlatformFeeBps,
     /// Per-offering per-asset fee override (#98).
@@ -785,6 +841,7 @@ pub struct RevoraRevenueShare;
 #[contractimpl]
 impl RevoraRevenueShare {
     const META_AUTH_VERSION: u32 = 1;
+    const MAX_GATE_ATTESTATION_AGE_SECS: u64 = 30 * 24 * 60 * 60;
 
 
 
@@ -932,6 +989,38 @@ impl RevoraRevenueShare {
         Ok(offering.payout_asset)
     }
 
+    fn require_clippy_format_gate(env: &Env, offering_id: &OfferingId) -> Result<(), RevoraError> {
+        let policy_key = DataKey::ClippyFormatGateConfig(offering_id.clone());
+        let policy: ClippyFormatGateConfig = match env.storage().persistent().get(&policy_key) {
+            Some(cfg) => cfg,
+            None => return Ok(()),
+        };
+
+        if !policy.enforce {
+            return Ok(());
+        }
+
+        let attestation_key = DataKey::ClippyFormatGateAttestation(offering_id.clone());
+        let attestation: ClippyFormatGateAttestation =
+            env.storage().persistent().get(&attestation_key).ok_or(RevoraError::GateCheckFailed)?;
+
+        if !attestation.format_ok || !attestation.clippy_ok {
+            return Err(RevoraError::GateCheckFailed);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < attestation.attested_at {
+            return Err(RevoraError::GateAttestationExpired);
+        }
+
+        let age = now.saturating_sub(attestation.attested_at);
+        if age > policy.max_attestation_age_secs {
+            return Err(RevoraError::GateAttestationExpired);
+        }
+
+        Ok(())
+    }
+
     /// Internal helper for revenue deposits.
     /// Validates amount using the Negative Amount Validation Matrix (#163).
     fn do_deposit_revenue(
@@ -963,6 +1052,8 @@ impl RevoraRevenueShare {
         // Validate inputs (#35)
         Self::require_valid_period_id(period_id)?;
         Self::require_positive_amount(amount)?;
+        Self::require_clippy_format_gate(env, &offering_id)?;
+        Self::require_clippy_format_gate(env, &offering_id)?;
 
         // Verify offering exists
         if Self::get_offering(env.clone(), issuer.clone(), namespace.clone(), token.clone())
@@ -1461,6 +1552,8 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
                 return Err(RevoraError::OfferingNotFound);
             }
 
+            Self::require_clippy_format_gate(&env, &offering_id)?;
+
             let offering =
                 Self::get_offering(env.clone(), issuer.clone(), namespace.clone(), token.clone())
                     .ok_or(RevoraError::OfferingNotFound)?;
@@ -1691,25 +1784,28 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
             (payout_asset.clone(), amount, period_id),
         );
 
-        // Audit log summary (#34): maintain per-offering total revenue and report count
-        // only for persisted reports. Event-only mode should not mutate summary state.
-        if !event_only {
-            let summary_key = DataKey::AuditSummary(offering_id.clone());
-            let mut summary: AuditSummary = env
-                .storage()
-                .persistent()
-                .get(&summary_key)
-                .unwrap_or(AuditSummary { total_revenue: 0, report_count: 0 });
-            summary.total_revenue = summary.total_revenue.saturating_add(amount);
-            summary.report_count = summary.report_count.saturating_add(1);
-            env.storage().persistent().set(&summary_key, &summary);
-        }
         // Optionally emit versioned v1 events for forward-compatible consumers
         if Self::is_event_versioning_enabled(env.clone()) {
             env.events().publish(
                 (EVENT_REV_INIT_V1, issuer.clone(), namespace.clone(), token.clone()),
                 (EVENT_SCHEMA_VERSION, amount, period_id, blacklist.clone()),
             );
+
+            env.events().publish(
+                (EVENT_REV_INIA_V1, issuer.clone(), namespace.clone(), token.clone()),
+                (EVENT_SCHEMA_VERSION, payout_asset.clone(), amount, period_id, blacklist.clone()),
+            );
+
+            env.events().publish(
+                (EVENT_REV_REP_V1, issuer.clone(), namespace.clone(), token.clone()),
+                (EVENT_SCHEMA_VERSION, amount, period_id, blacklist.clone()),
+            );
+
+            env.events().publish(
+                (EVENT_REV_REPA_V1, issuer.clone(), namespace.clone(), token.clone()),
+                (EVENT_SCHEMA_VERSION, payout_asset.clone(), amount, period_id),
+            );
+        }
 
         /// Versioned event v2: [version: u32, payout_asset: Address, amount: i128, period_id: u64, blacklist: Vec<Address>]
         Self::emit_v2_event(
@@ -1731,6 +1827,53 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
             (EVENT_REV_REPA_V2, issuer.clone(), namespace.clone(), token.clone()),
             (payout_asset.clone(), amount, period_id)
         );
+
+        Ok(())
+    }
+
+    pub fn reconcile_audit_summary(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+    ) -> AuditReconciliationResult {
+        let offering_id = OfferingId {
+            issuer,
+            namespace,
+            token,
+        };
+
+        let summary_key = DataKey::AuditSummary(offering_id.clone());
+        let stored: AuditSummary = env
+            .storage()
+            .persistent()
+            .get(&summary_key)
+            .unwrap_or(AuditSummary { total_revenue: 0, report_count: 0 });
+
+        let reports_key = DataKey::RevenueReports(offering_id);
+        let reports: Map<u64, (i128, u64)> = env
+            .storage()
+            .persistent()
+            .get(&reports_key)
+            .unwrap_or_else(|| Map::new(&env));
+
+        let computed_report_count = reports.len() as u64;
+        let mut computed_total: i128 = 0;
+        let mut saturated = false;
+
+        let keys = reports.keys();
+        for i in 0..keys.len() {
+            let period_id = keys.get(i).unwrap();
+            if let Some((amount, _)) = reports.get(period_id) {
+                match computed_total.checked_add(amount) {
+                    Some(total) => computed_total = total,
+                    None => {
+                        computed_total = i128::MAX;
+                        saturated = true;
+                    }
+                }
+            }
+        }
 
         let is_consistent = !saturated
             && stored.total_revenue == computed_total
@@ -4905,6 +5048,124 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
         let offering_id = OfferingId { issuer, namespace, token };
         let key = DataKey::OfferingMetadata(offering_id);
         env.storage().persistent().get(&key)
+    }
+
+    /// Configure clippy/format gate policy for an offering.
+    /// Security assumption: the caller is trusted to set policy controls for this offering.
+    pub fn set_clippy_format_gate(
+        env: Env,
+        caller: Address,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+        enforce: bool,
+        max_attestation_age_secs: u64,
+    ) -> Result<(), RevoraError> {
+        Self::require_not_frozen(&env)?;
+        Self::require_not_paused(&env);
+
+        if max_attestation_age_secs == 0
+            || max_attestation_age_secs > Self::MAX_GATE_ATTESTATION_AGE_SECS
+        {
+            return Err(RevoraError::GatePolicyInvalid);
+        }
+
+        let current_issuer =
+            Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
+                .ok_or(RevoraError::OfferingNotFound)?;
+
+        caller.require_auth();
+        if caller != current_issuer {
+            let admin = Self::get_admin(env.clone()).ok_or(RevoraError::NotInitialized)?;
+            if caller != admin {
+                return Err(RevoraError::NotAuthorized);
+            }
+        }
+
+        let offering_id = OfferingId {
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+        };
+
+        let config = ClippyFormatGateConfig { enforce, max_attestation_age_secs };
+
+        env.storage().persistent().set(&DataKey::ClippyFormatGateConfig(offering_id), &config);
+        env.events().publish(
+            (EVENT_GATE_CONFIG_SET, issuer, namespace, token),
+            (caller, enforce, max_attestation_age_secs),
+        );
+        Ok(())
+    }
+
+    /// Read clippy/format gate policy for an offering.
+    pub fn get_clippy_format_gate(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+    ) -> Option<ClippyFormatGateConfig> {
+        let offering_id = OfferingId { issuer, namespace, token };
+        env.storage().persistent().get(&DataKey::ClippyFormatGateConfig(offering_id))
+    }
+
+    /// Record clippy/format attestation for an offering.
+    /// Security assumption: attester is issuer or admin and upstream CI artifact hash is trustworthy.
+    pub fn attest_clippy_format_gate(
+        env: Env,
+        caller: Address,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+        attestation_input: ClippyFormatGateAttestationInput,
+    ) -> Result<(), RevoraError> {
+        Self::require_not_frozen(&env)?;
+        Self::require_not_paused(&env);
+
+        let current_issuer =
+            Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
+                .ok_or(RevoraError::OfferingNotFound)?;
+
+        caller.require_auth();
+        if caller != current_issuer {
+            let admin = Self::get_admin(env.clone()).ok_or(RevoraError::NotInitialized)?;
+            if caller != admin {
+                return Err(RevoraError::NotAuthorized);
+            }
+        }
+
+        let offering_id = OfferingId {
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+        };
+
+        let attestation = ClippyFormatGateAttestation {
+            attested_at: env.ledger().timestamp(),
+            format_ok: attestation_input.format_ok,
+            clippy_ok: attestation_input.clippy_ok,
+            artifact_hash: attestation_input.artifact_hash,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::ClippyFormatGateAttestation(offering_id), &attestation);
+        env.events().publish(
+            (EVENT_GATE_ATTESTED, issuer, namespace, token),
+            (caller, attestation_input.format_ok, attestation_input.clippy_ok),
+        );
+        Ok(())
+    }
+
+    /// Read clippy/format gate attestation for an offering.
+    pub fn get_clippy_format_attestation(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+    ) -> Option<ClippyFormatGateAttestation> {
+        let offering_id = OfferingId { issuer, namespace, token };
+        env.storage().persistent().get(&DataKey::ClippyFormatGateAttestation(offering_id))
     }
 
     // ── Testnet mode configuration (#24) ───────────────────────
