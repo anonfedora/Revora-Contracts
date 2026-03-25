@@ -10,6 +10,8 @@ use soroban_sdk::{
     testutils::{Address as _, Events as _, Ledger as _},
     token, vec, Address, Env, IntoVal, String as SdkString, Symbol, Vec,
 };
+use proptest::{prelude::*, prop};
+use crate::proptest_helpers::{any_test_operation, TestOperation};
 
 // ── helper ────────────────────────────────────────────────────
 
