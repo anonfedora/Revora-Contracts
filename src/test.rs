@@ -8227,18 +8227,24 @@ mod scenarios {
         assert_eq!(next, Some(201));
     }
 
-    #[test]
-    fn test_revenue_range_chunk_empty_offering() {
-        let env = Env::default();
-        let client = make_client(&env);
-        let unknown_issuer = Address::generate(&env);
-        let ns = symbol_short!("def");
-        let token = Address::generate(&env);
+ #[test]
+fn test_revenue_range_chunk_empty_offering() {
+    let env = Env::default();
+    let client = make_client(&env);
+    let unknown_issuer = Address::generate(&env);
+    let ns = symbol_short!("def");
+    let token = Address::generate(&env);
 
-        // Should just return 0 sum since no revenue exists
-        let (sum, next) = client.get_revenue_range_chunk(&unknown_issuer, &ns, &token, &1u64, &10u64, &10u32);
-        assert_eq!(sum, 0);
-        assert_eq!(next, None);
-    }
-}
+    // Should just return 0 sum since no revenue exists
+    let (sum, next) = client.get_revenue_range_chunk(
+        &unknown_issuer,
+        &ns,
+        &token,
+        &1u64,
+        &10u64,
+        &10u32
+    );
+
+    assert_eq!(sum, 0);
+    assert_eq!(next, None);
 }
