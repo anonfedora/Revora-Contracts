@@ -58,7 +58,9 @@ pub enum RevoraError {
     /// Amount is invalid (e.g. negative for deposit, or out of allowed range) (#35).
     InvalidAmount = 21,
     /// period_id is invalid (e.g. zero when required to be positive) (#35).
+    /// period_id not strictly greater than previous (violates ordering invariant).
     InvalidPeriodId = 22,
+
     /// Deposit would exceed the offering's supply cap (#96).
     SupplyCapExceeded = 23,
     /// Metadata format is invalid for configured scheme rules.
@@ -368,7 +370,10 @@ pub enum RoundingMode {
 /// `RevenueIndex` and `RevenueReports` track reported (un-deposited) revenue totals and details.
 #[contracttype]
 pub enum DataKey {
+    /// Last deposited/reported period_id for offering (enforces strictly increasing ordering).
+    LastPeriodId(OfferingId),
     Blacklist(OfferingId),
+
     /// Per-offering whitelist; when non-empty, only these addresses are eligible for distribution.
     Whitelist(OfferingId),
     /// Per-offering: blacklist addresses in insertion order for deterministic get_blacklist (#38).
@@ -635,6 +640,10 @@ impl RevoraRevenueShare {
             return Err(RevoraError::OfferingNotFound);
         }
 
+        // Enforce period ordering invariant (double-check at deposit)
+        Self::require_next_period_id(env, &offering_id, period_id)?;
+
+
         // Check period not already deposited
         let rev_key = DataKey::PeriodRevenue(offering_id.clone(), period_id);
         if env.storage().persistent().has(&rev_key) {
@@ -723,14 +732,21 @@ impl RevoraRevenueShare {
         Ok(())
     }
 
-    /// Input validation (#35): require period_id > 0 where 0 would be ambiguous.
-    #[allow(dead_code)]
-    fn require_valid_period_id(period_id: u64) -> Result<(), RevoraError> {
-        if period_id == 0 {
-            return Err(RevoraError::InvalidPeriodId);
-        }
-        Ok(())
+/// Require period_id is valid next in strictly increasing sequence for offering.
+/// Panics if offering not found.
+fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -> Result<(), RevoraError> {
+    if period_id == 0 {
+        return Err(RevoraError::InvalidPeriodId);
     }
+    let key = DataKey::LastPeriodId(offering_id.clone());
+    let last: u64 = env.storage().persistent().get(&key).unwrap_or(0);
+    if period_id <= last {
+        return Err(RevoraError::InvalidPeriodId);
+    }
+    env.storage().persistent().set(&key, &period_id);
+    Ok(())
+}
+
 
     /// Input validation (#35): require amount >= 0 for reporting (allow zero revenue report).
     fn require_non_negative_amount(amount: i128) -> Result<(), RevoraError> {
@@ -1063,6 +1079,9 @@ impl RevoraRevenueShare {
         };
         Self::require_report_window_open(&env, &offering_id)?;
 
+        // Enforce period ordering invariant
+        Self::require_next_period_id(&env, &offering_id, period_id)?;
+
         if !event_only {
             // Verify offering exists and issuer is current
             let current_issuer =
@@ -1098,6 +1117,7 @@ impl RevoraRevenueShare {
                 }
             }
         }
+
 
         let blacklist = if event_only {
             Vec::new(&env)
