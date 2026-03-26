@@ -107,6 +107,80 @@ fn cliff_longer_than_duration_rejected() {
     env.mock_all_auths();
     let (client, admin, beneficiary, token_id) = setup(&env);
     client.initialize_vesting(&admin);
-    let r = client.try_create_schedule(&admin, &beneficiary, &token_id, &1000, &1000, &2000, &1000);
     assert!(r.is_err());
 }
+
+#[test]
+fn negative_amount_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, beneficiary, token_id) = setup(&env);
+    client.initialize_vesting(&admin);
+    let r = client.try_create_schedule(&admin, &beneficiary, &token_id, &0, &1000, &0, &1000);
+    assert!(r.is_err());
+    let r2 = client.try_create_schedule(&admin, &beneficiary, &token_id, &-10, &1000, &0, &1000);
+    assert!(r2.is_err());
+}
+
+#[test]
+fn double_initialize_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _b, _t) = setup(&env);
+    client.initialize_vesting(&admin);
+    let r = client.try_initialize_vesting(&admin);
+    assert!(r.is_err());
+}
+
+#[test]
+fn test_claim_vesting_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, beneficiary, token_id) = setup(&env);
+    client.initialize_vesting(&admin);
+
+    // Mint tokens to the contract
+    let str_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
+    str_client.mint(&client.address, &1000);
+
+    let start = 1000;
+    client.create_schedule(&admin, &beneficiary, &token_id, &1000, &start, &0, &1000);
+    
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+    let claimed = client.claim_vesting(&beneficiary, &admin, &0);
+    assert_eq!(claimed, 500);
+    
+    env.ledger().with_mut(|l| l.timestamp = 2500);
+    let claimed2 = client.claim_vesting(&beneficiary, &admin, &0);
+    assert_eq!(claimed2, 500);
+    
+    let r = client.try_claim_vesting(&beneficiary, &admin, &0);
+    assert!(r.is_err());
+}
+
+#[test]
+fn cancel_schedule_already_cancelled() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, beneficiary, token_id) = setup(&env);
+    client.initialize_vesting(&admin);
+    client.create_schedule(&admin, &beneficiary, &token_id, &1000, &1000, &100, &2000);
+
+    client.cancel_schedule(&admin, &beneficiary, &0);
+    let r = client.try_cancel_schedule(&admin, &beneficiary, &0);
+    assert!(r.is_err());
+}
+
+#[test]
+fn try_cancel_schedule_wrong_beneficiary() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, beneficiary, token_id) = setup(&env);
+    let wrong_beneficiary = Address::generate(&env);
+    client.initialize_vesting(&admin);
+    client.create_schedule(&admin, &beneficiary, &token_id, &1000, &1000, &100, &2000);
+
+    let r = client.try_cancel_schedule(&admin, &wrong_beneficiary, &0);
+    assert!(r.is_err());
+}
+

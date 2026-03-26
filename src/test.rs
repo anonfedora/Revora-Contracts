@@ -8083,5 +8083,3 @@ mod scenarios {
         assert!(claim_res_blocked.is_err(), "Claim should fail due to blacklist");
     }
 }
-} // mod regression
-
