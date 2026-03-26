@@ -107,6 +107,7 @@ fn cliff_longer_than_duration_rejected() {
     env.mock_all_auths();
     let (client, admin, beneficiary, token_id) = setup(&env);
     client.initialize_vesting(&admin);
+    let r = client.try_create_schedule(&admin, &beneficiary, &token_id, &1000, &1000, &2000, &1000);
     assert!(r.is_err());
 }
 
@@ -145,15 +146,15 @@ fn test_claim_vesting_success() {
 
     let start = 1000;
     client.create_schedule(&admin, &beneficiary, &token_id, &1000, &start, &0, &1000);
-    
+
     env.ledger().with_mut(|l| l.timestamp = 1500);
     let claimed = client.claim_vesting(&beneficiary, &admin, &0);
     assert_eq!(claimed, 500);
-    
+
     env.ledger().with_mut(|l| l.timestamp = 2500);
     let claimed2 = client.claim_vesting(&beneficiary, &admin, &0);
     assert_eq!(claimed2, 500);
-    
+
     let r = client.try_claim_vesting(&beneficiary, &admin, &0);
     assert!(r.is_err());
 }
@@ -183,4 +184,3 @@ fn try_cancel_schedule_wrong_beneficiary() {
     let r = client.try_cancel_schedule(&admin, &wrong_beneficiary, &0);
     assert!(r.is_err());
 }
-
