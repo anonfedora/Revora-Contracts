@@ -1,3 +1,4 @@
+#![cfg(test)]
 #![allow(dead_code, unused_variables, unused_imports)]
 
 use crate::{RevoraRevenueShare, RevoraRevenueShareClient};
@@ -5,14 +6,14 @@ use soroban_sdk::{symbol_short, testutils::Address as _, token, Address, Env, Ve
 
 // Minimal helpers duplicated from src/test.rs so these chunking tests can live separately.
 fn make_client(env: &Env) -> RevoraRevenueShareClient<'_> {
-    let id = env.register_contract(None, RevoraRevenueShare);
+    let id = env.register_contract(None, crate::RevoraRevenueShare);
     RevoraRevenueShareClient::new(env, &id)
 }
 
 fn setup() -> (Env, RevoraRevenueShareClient<'static>, Address) {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register_contract(None, RevoraRevenueShare);
+    let contract_id = env.register_contract(None, crate::RevoraRevenueShare);
     let client = RevoraRevenueShareClient::new(&env, &contract_id);
     let issuer = Address::generate(&env);
     (env, client, issuer)
