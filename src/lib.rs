@@ -75,6 +75,8 @@ pub enum RevoraError {
     SignerKeyNotRegistered = 29,
     /// Contract is currently paused.
     ContractPaused = 30,
+    /// Offering is currently paused.
+    OfferingPaused = 31,
 }
 
 // ── Event symbols ────────────────────────────────────────────
@@ -148,6 +150,8 @@ const EVENT_SNAP_CONFIG: Symbol = symbol_short!("snap_cfg");
 const EVENT_INIT: Symbol = symbol_short!("init");
 const EVENT_PAUSED: Symbol = symbol_short!("paused");
 const EVENT_UNPAUSED: Symbol = symbol_short!("unpaused");
+const EVENT_OFFERING_PAUSED: Symbol = symbol_short!("off_paus");
+const EVENT_OFFERING_UNPAUSED: Symbol = symbol_short!("off_unpa");
 
 const EVENT_ISSUER_TRANSFER_PROPOSED: Symbol = symbol_short!("iss_prop");
 const EVENT_ISSUER_TRANSFER_ACCEPTED: Symbol = symbol_short!("iss_acc");
@@ -435,6 +439,8 @@ pub enum DataKey {
     Safety,
     /// Global pause flag; when true, state-mutating ops are disabled (#7).
     Paused,
+    /// Per-offering pause flag; when true, state-mutating ops for that offering are disabled.
+    PausedOffering(OfferingId),
 
     /// Feature flag: emit versioned events when present (v1 schema).
     EventVersioningEnabled,
@@ -624,6 +630,7 @@ impl RevoraRevenueShare {
             namespace: namespace.clone(),
             token: token.clone(),
         };
+        Self::require_offering_not_paused(env, &offering_id)?;
 
         // Verify offering exists
         if Self::get_offering(env.clone(), issuer.clone(), namespace.clone(), token.clone())
@@ -848,6 +855,70 @@ impl RevoraRevenueShare {
         env.events().publish((EVENT_UNPAUSED, caller.clone()), ());
     }
 
+    /// Pause a specific offering (Admin, Safety, or Issuer only).
+    pub fn pause_offering(
+        env: Env,
+        caller: Address,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+    ) -> Result<(), RevoraError> {
+        caller.require_auth();
+        let offering_id = OfferingId {
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+        };
+
+        // Check if caller is admin, safety, or current issuer
+        let admin: Address =
+            env.storage().persistent().get(&DataKey::Admin).expect("admin not set");
+        let safety: Option<Address> = env.storage().persistent().get(&DataKey::Safety);
+        let current_issuer =
+            Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
+                .ok_or(RevoraError::OfferingNotFound)?;
+
+        if caller != admin && safety.is_none_or(|s| caller != s) && caller != current_issuer {
+            return Err(RevoraError::NotAuthorized);
+        }
+
+        env.storage().persistent().set(&DataKey::PausedOffering(offering_id), &true);
+        env.events().publish((EVENT_OFFERING_PAUSED, issuer, namespace, token), (caller,));
+        Ok(())
+    }
+
+    /// Unpause a specific offering (Admin, Safety, or Issuer only).
+    pub fn unpause_offering(
+        env: Env,
+        caller: Address,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+    ) -> Result<(), RevoraError> {
+        caller.require_auth();
+        let offering_id = OfferingId {
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+        };
+
+        // Check if caller is admin, safety, or current issuer
+        let admin: Address =
+            env.storage().persistent().get(&DataKey::Admin).expect("admin not set");
+        let safety: Option<Address> = env.storage().persistent().get(&DataKey::Safety);
+        let current_issuer =
+            Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
+                .ok_or(RevoraError::OfferingNotFound)?;
+
+        if caller != admin && safety.is_none_or(|s| caller != s) && caller != current_issuer {
+            return Err(RevoraError::NotAuthorized);
+        }
+
+        env.storage().persistent().set(&DataKey::PausedOffering(offering_id), &false);
+        env.events().publish((EVENT_OFFERING_UNPAUSED, issuer, namespace, token), (caller,));
+        Ok(())
+    }
+
     /// Query the paused state of the contract.
     pub fn is_paused(env: Env) -> bool {
         env.storage().persistent().get::<DataKey, bool>(&DataKey::Paused).unwrap_or(false)
@@ -857,6 +928,33 @@ impl RevoraRevenueShare {
     fn require_not_paused(env: &Env) -> Result<(), RevoraError> {
         if env.storage().persistent().get::<DataKey, bool>(&DataKey::Paused).unwrap_or(false) {
             return Err(RevoraError::ContractPaused);
+        }
+        Ok(())
+    }
+
+    /// Query the paused state of an offering.
+    pub fn is_offering_paused(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+    ) -> bool {
+        let offering_id = OfferingId { issuer, namespace, token };
+        env.storage()
+            .persistent()
+            .get::<DataKey, bool>(&DataKey::PausedOffering(offering_id))
+            .unwrap_or(false)
+    }
+
+    /// Helper: panic if offering is paused. Used by state-mutating entrypoints.
+    fn require_offering_not_paused(env: &Env, offering_id: &OfferingId) -> Result<(), RevoraError> {
+        if env
+            .storage()
+            .persistent()
+            .get::<DataKey, bool>(&DataKey::PausedOffering(offering_id.clone()))
+            .unwrap_or(false)
+        {
+            return Err(RevoraError::OfferingPaused);
         }
         Ok(())
     }
@@ -1060,6 +1158,7 @@ impl RevoraRevenueShare {
             token: token.clone(),
         };
         Self::require_report_window_open(&env, &offering_id)?;
+        Self::require_offering_not_paused(&env, &offering_id)?;
 
         if !event_only {
             // Verify offering exists and issuer is current
@@ -1273,7 +1372,6 @@ impl RevoraRevenueShare {
             (payout_asset.clone(), amount, period_id),
         );
 
-
         // Optionally emit versioned v1 events for forward-compatible consumers
         if Self::is_event_versioning_enabled(env.clone()) {
             env.events().publish(
@@ -1455,6 +1553,7 @@ impl RevoraRevenueShare {
             namespace: namespace.clone(),
             token: token.clone(),
         };
+        Self::require_offering_not_paused(&env, &offering_id)?;
 
         let current_issuer =
             Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
@@ -1517,6 +1616,7 @@ impl RevoraRevenueShare {
             namespace: namespace.clone(),
             token: token.clone(),
         };
+        Self::require_offering_not_paused(&env, &offering_id)?;
 
         let current_issuer =
             Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
@@ -1601,16 +1701,19 @@ impl RevoraRevenueShare {
         namespace: Symbol,
         token: Address,
         investor: Address,
-    ) {
+    ) -> Result<(), RevoraError> {
+        Self::require_not_frozen(&env)?;
+        Self::require_not_paused(&env)?;
         caller.require_auth();
         let current_issuer =
             Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
-                .expect("offering not found");
+                .ok_or(RevoraError::OfferingNotFound)?;
         if caller != current_issuer {
-            panic!("not authorized");
+            return Err(RevoraError::NotAuthorized);
         }
 
         let offering_id = OfferingId { issuer, namespace, token };
+        Self::require_offering_not_paused(&env, &offering_id)?;
         let key = DataKey::Whitelist(offering_id.clone());
         let mut map: Map<Address, bool> =
             env.storage().persistent().get(&key).unwrap_or_else(|| Map::new(&env));
@@ -1627,6 +1730,7 @@ impl RevoraRevenueShare {
             ),
             (caller, investor),
         );
+        Ok(())
     }
 
     /// Remove `investor` from the per-offering whitelist for `token`.
@@ -1640,16 +1744,19 @@ impl RevoraRevenueShare {
         namespace: Symbol,
         token: Address,
         investor: Address,
-    ) {
+    ) -> Result<(), RevoraError> {
+        Self::require_not_frozen(&env)?;
+        Self::require_not_paused(&env)?;
         caller.require_auth();
         let current_issuer =
             Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
-                .expect("offering not found");
+                .ok_or(RevoraError::OfferingNotFound)?;
         if caller != current_issuer {
-            panic!("not authorized");
+            return Err(RevoraError::NotAuthorized);
         }
 
         let offering_id = OfferingId { issuer, namespace, token };
+        Self::require_offering_not_paused(&env, &offering_id)?;
         let key = DataKey::Whitelist(offering_id.clone());
         let mut map: Map<Address, bool> =
             env.storage().persistent().get(&key).unwrap_or_else(|| Map::new(&env));
@@ -1666,6 +1773,7 @@ impl RevoraRevenueShare {
             ),
             (caller, investor),
         );
+        Ok(())
     }
 
     /// Returns `true` if `investor` is whitelisted for `token`'s offering.
@@ -1751,6 +1859,7 @@ impl RevoraRevenueShare {
             namespace: namespace.clone(),
             token: token.clone(),
         };
+        Self::require_offering_not_paused(&env, &offering_id)?;
         let current_issuer =
             Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
                 .ok_or(RevoraError::LimitReached)?;
@@ -1794,6 +1903,7 @@ impl RevoraRevenueShare {
             namespace: namespace.clone(),
             token: token.clone(),
         };
+        Self::require_offering_not_paused(&env, &offering_id)?;
 
         // Verify offering exists and issuer is current
         let current_issuer =
@@ -1875,6 +1985,7 @@ impl RevoraRevenueShare {
             namespace: namespace.clone(),
             token: token.clone(),
         };
+        Self::require_offering_not_paused(&env, &offering_id)?;
         let current_issuer =
             Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
                 .ok_or(RevoraError::OfferingNotFound)?;
@@ -1917,6 +2028,7 @@ impl RevoraRevenueShare {
             namespace: namespace.clone(),
             token: token.clone(),
         };
+        Self::require_offering_not_paused(&env, &offering_id)?;
         let current_issuer =
             Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
                 .ok_or(RevoraError::OfferingNotFound)?;
@@ -1971,6 +2083,7 @@ impl RevoraRevenueShare {
             namespace: namespace.clone(),
             token: token.clone(),
         };
+        Self::require_offering_not_paused(&env, &offering_id)?;
         let current_issuer =
             Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
                 .ok_or(RevoraError::OfferingNotFound)?;
@@ -2149,6 +2262,7 @@ impl RevoraRevenueShare {
             return Err(RevoraError::OfferingNotFound);
         }
         let offering_id = OfferingId { issuer, namespace, token };
+        Self::require_offering_not_paused(&env, &offering_id)?;
         let key = DataKey::SnapshotConfig(offering_id.clone());
         env.storage().persistent().set(&key, &enabled);
         env.events().publish(
@@ -2214,6 +2328,7 @@ impl RevoraRevenueShare {
             namespace: namespace.clone(),
             token: token.clone(),
         };
+        Self::require_offering_not_paused(&env, &offering_id)?;
         let current_issuer =
             Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
                 .ok_or(RevoraError::OfferingNotFound)?;
@@ -2268,6 +2383,7 @@ impl RevoraRevenueShare {
             namespace: namespace.clone(),
             token: token.clone(),
         };
+        Self::require_offering_not_paused(&env, &offering_id)?;
         env.storage().persistent().set(&MetaDataKey::Delegate(offering_id), &delegate);
         env.events().publish((EVENT_META_DELEGATE_SET, issuer, namespace, token), delegate);
         Ok(())
@@ -2312,6 +2428,7 @@ impl RevoraRevenueShare {
             namespace: payload.namespace.clone(),
             token: payload.token.clone(),
         };
+        Self::require_offering_not_paused(&env, &offering_id)?;
         let configured_delegate: Address = env
             .storage()
             .persistent()
@@ -2366,6 +2483,7 @@ impl RevoraRevenueShare {
             namespace: payload.namespace.clone(),
             token: payload.token.clone(),
         };
+        Self::require_offering_not_paused(&env, &offering_id)?;
         let configured_delegate: Address = env
             .storage()
             .persistent()
@@ -2455,6 +2573,7 @@ impl RevoraRevenueShare {
         }
 
         let offering_id = OfferingId { issuer, namespace, token };
+        Self::require_offering_not_paused(&env, &offering_id)?;
         Self::require_claim_window_open(&env, &offering_id)?;
 
         let count_key = DataKey::PeriodCount(offering_id.clone());
@@ -2569,6 +2688,7 @@ impl RevoraRevenueShare {
             namespace: namespace.clone(),
             token: token.clone(),
         };
+        Self::require_offering_not_paused(&env, &offering_id)?;
         env.storage().persistent().set(&WindowDataKey::Report(offering_id), &window);
         env.events().publish(
             (EVENT_REPORT_WINDOW_SET, issuer, namespace, token),
@@ -2602,6 +2722,7 @@ impl RevoraRevenueShare {
             namespace: namespace.clone(),
             token: token.clone(),
         };
+        Self::require_offering_not_paused(&env, &offering_id)?;
         env.storage().persistent().set(&WindowDataKey::Claim(offering_id), &window);
         env.events().publish(
             (EVENT_CLAIM_WINDOW_SET, issuer, namespace, token),
@@ -2842,6 +2963,7 @@ impl RevoraRevenueShare {
             namespace: namespace.clone(),
             token: token.clone(),
         };
+        Self::require_offering_not_paused(&env, &offering_id)?;
         let current_issuer =
             Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
                 .ok_or(RevoraError::OfferingNotFound)?;
@@ -3611,6 +3733,7 @@ impl RevoraRevenueShare {
             namespace: namespace.clone(),
             token: token.clone(),
         };
+        Self::require_offering_not_paused(&env, &offering_id)?;
         let current_issuer =
             Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
                 .ok_or(RevoraError::OfferingNotFound)?;

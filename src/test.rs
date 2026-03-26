@@ -232,7 +232,7 @@ fn complex_mixed_flow_events_in_order() {
     let token_y = Address::generate(&env);
     client.register_offering(&issuer_a, &symbol_short!("def"), &token_x, &500, &token_x, &0);
     client.register_offering(&issuer_b, &symbol_short!("def"), &token_y, &750, &token_y, &0);
-    
+
     client.report_revenue(
         &issuer_a,
         &symbol_short!("def"),
@@ -1616,7 +1616,8 @@ fn blacklist_remove_requires_auth() {
     let token = Address::generate(&env);
     let investor = Address::generate(&env);
 
-    let r = client.try_blacklist_remove(&bad_actor, &issuer, &symbol_short!("def"), &token, &investor);
+    let r =
+        client.try_blacklist_remove(&bad_actor, &issuer, &symbol_short!("def"), &token, &investor);
     assert!(r.is_err());
 }
 
@@ -4652,7 +4653,6 @@ fn multisig_setup() -> (Env, RevoraRevenueShareClient<'static>, Address, Address
 
     let caller = Address::generate(&env);
     /// removed overwriting issuer
-
     let owner1 = Address::generate(&env);
     let owner2 = Address::generate(&env);
     let owner3 = Address::generate(&env);
@@ -5497,7 +5497,8 @@ fn blacklist_remove_blocked_while_paused() {
     client.initialize(&admin, &None::<Address>, &None::<bool>);
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
     client.pause_admin(&admin);
-    let res = client.try_blacklist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    let res =
+        client.try_blacklist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor);
     assert!(res.is_err());
 }
 #[test]
@@ -5534,7 +5535,6 @@ fn large_period_range_sums_correctly_full() {
 fn calculate_distribution_basic() {
     let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
     let caller = Address::generate(&env);
-    
 
     let holder = Address::generate(&env);
 
@@ -5616,7 +5616,6 @@ fn calculate_distribution_bps_25_percent() {
 fn calculate_distribution_zero_revenue() {
     let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
     let caller = Address::generate(&env);
-    
 
     let holder = Address::generate(&env);
 
@@ -5638,7 +5637,6 @@ fn calculate_distribution_zero_revenue() {
 fn calculate_distribution_zero_balance() {
     let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
     let caller = Address::generate(&env);
-    
 
     let holder = Address::generate(&env);
 
@@ -5662,7 +5660,6 @@ fn calculate_distribution_zero_balance() {
 fn calculate_distribution_zero_supply_panics() {
     let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
     let caller = Address::generate(&env);
-    
 
     let holder = Address::generate(&env);
 
@@ -5711,7 +5708,6 @@ fn calculate_distribution_nonexistent_offering_panics() {
 fn calculate_distribution_blacklisted_holder_panics() {
     let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
     let caller = Address::generate(&env);
-    
 
     let holder = Address::generate(&env);
 
@@ -5807,7 +5803,6 @@ fn calculate_distribution_rounds_down_exact() {
 fn calculate_distribution_large_values() {
     let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
     let caller = Address::generate(&env);
-    
 
     let holder = Address::generate(&env);
 
@@ -5833,7 +5828,6 @@ fn calculate_distribution_large_values() {
 fn calculate_distribution_emits_event() {
     let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
     let caller = Address::generate(&env);
-    
 
     let holder = Address::generate(&env);
 
@@ -6037,7 +6031,6 @@ fn calculate_distribution_offering_isolation() {
     let token_b = Address::generate(&env);
     let caller = Address::generate(&env);
     /// removed overwriting issuer
-
     let holder = Address::generate(&env);
 
     client.register_offering(&issuer, &symbol_short!("def"), &token_b, &8_000, &token_b, &0);
@@ -6087,7 +6080,6 @@ fn calculate_total_distributable_offering_isolation() {
 fn calculate_distribution_tiny_balance() {
     let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
     let caller = Address::generate(&env);
-    
 
     let holder = Address::generate(&env);
 
@@ -6109,7 +6101,6 @@ fn calculate_distribution_tiny_balance() {
 fn calculate_distribution_all_zeros_except_supply() {
     let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
     let caller = Address::generate(&env);
-    
 
     let holder = Address::generate(&env);
 
@@ -6131,7 +6122,6 @@ fn calculate_distribution_all_zeros_except_supply() {
 fn calculate_distribution_single_holder_owns_all() {
     let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
     let caller = Address::generate(&env);
-    
 
     let holder = Address::generate(&env);
 
@@ -6908,7 +6898,7 @@ mod regression {
     }
 
     #[test]
-#[ignore]
+    #[ignore]
     #[should_panic]
     fn set_platform_fee_requires_admin() {
         let env = Env::default();
@@ -6996,7 +6986,7 @@ mod regression {
     }
 
     #[test]
-#[ignore]
+    #[ignore]
     #[should_panic]
     fn platform_fee_only_admin_can_set() {
         let env = Env::default();
@@ -8165,4 +8155,113 @@ mod scenarios {
             client.try_claim(&investor, &issuer, &symbol_short!("def"), &token, &0);
         assert!(claim_res_blocked.is_err(), "Claim should fail due to blacklist");
     }
+}
+
+// ── Per-offering pause tests ─────────────────────────────────────────────────
+
+#[test]
+fn test_per_offering_pause_authorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, RevoraRevenueShare);
+    let client = RevoraRevenueShareClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let safety = Address::generate(&env);
+    client.initialize(&admin, &Some(safety.clone()), &Some(false));
+
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let namespace = symbol_short!("def");
+
+    client.register_offering(&issuer, &namespace, &token, &1000, &token, &0);
+
+    // Safety role should be able to pause
+    client.pause_offering(&safety, &issuer, &namespace, &token);
+    assert!(client.is_offering_paused(&issuer, &namespace, &token));
+
+    // Safety role should be able to unpause
+    client.unpause_offering(&safety, &issuer, &namespace, &token);
+    assert!(!client.is_offering_paused(&issuer, &namespace, &token));
+
+    // Issuer should be able to pause
+    client.pause_offering(&issuer, &issuer, &namespace, &token);
+    assert!(client.is_offering_paused(&issuer, &namespace, &token));
+
+    // Admin should be able to unpause
+    client.unpause_offering(&admin, &issuer, &namespace, &token);
+    assert!(!client.is_offering_paused(&issuer, &namespace, &token));
+}
+
+#[test]
+fn test_blocked_by_offering_pause() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, RevoraRevenueShare);
+    let client = RevoraRevenueShareClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &None, &Some(false));
+
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let namespace = symbol_short!("def");
+
+    client.register_offering(&issuer, &namespace, &token, &1000, &token, &0);
+
+    // Pause the offering
+    client.pause_offering(&issuer, &issuer, &namespace, &token);
+
+    // report_revenue should fail
+    let res = client.try_report_revenue(&issuer, &namespace, &token, &token, &1000, &1, &false);
+    assert!(res.is_err());
+
+    // claim should fail
+    let holder = Address::generate(&env);
+    let res = client.try_claim(&holder, &issuer, &namespace, &token, &0);
+    assert!(res.is_err());
+
+    // set_offering_metadata should fail
+    let res = client.try_set_offering_metadata(
+        &issuer,
+        &namespace,
+        &token,
+        &soroban_sdk::String::from_str(&env, "ipfs://..."),
+    );
+    assert!(res.is_err());
+
+    // Unpause
+    client.unpause_offering(&issuer, &issuer, &namespace, &token);
+
+    // report_revenue should now succeed
+    let res = client.try_report_revenue(&issuer, &namespace, &token, &token, &1000, &1, &false);
+    assert!(res.is_ok());
+}
+
+#[test]
+fn test_per_offering_pause_persistence() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, RevoraRevenueShare);
+    let client = RevoraRevenueShareClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &None, &Some(false));
+
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let namespace = symbol_short!("def");
+
+    client.register_offering(&issuer, &namespace, &token, &1000, &token, &0);
+    client.pause_offering(&issuer, &issuer, &namespace, &token);
+
+    // In a real blockchain, we'd check ledger state, here we just verify it stays paused
+    // across multiple calls and within the same block state simulation.
+    assert!(client.is_offering_paused(&issuer, &namespace, &token));
+
+    // Verify it doesn't affect OTHER tokens
+    let token2 = Address::generate(&env);
+    client.register_offering(&issuer, &namespace, &token2, &1000, &token2, &0);
+    assert!(!client.is_offering_paused(&issuer, &namespace, &token2));
 }
