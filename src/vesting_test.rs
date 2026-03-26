@@ -184,3 +184,109 @@ fn try_cancel_schedule_wrong_beneficiary() {
     let r = client.try_cancel_schedule(&admin, &wrong_beneficiary, &0);
     assert!(r.is_err());
 }
+
+#[test]
+fn amend_schedule_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, beneficiary, token_id) = setup(&env);
+    client.initialize_vesting(&admin);
+
+    let start = 1000;
+    client.create_schedule(&admin, &beneficiary, &token_id, &1000, &start, &0, &1000);
+
+    // Amend: Increase total amount and double duration
+    client.amend_schedule(&admin, &beneficiary, &0, &2000, &start, &0, &2000);
+
+    let schedule = client.get_schedule(&admin, &0);
+    assert_eq!(schedule.total_amount, 2000);
+    assert_eq!(schedule.end_time, start + 2000);
+}
+
+#[test]
+fn amend_schedule_partially_claimed_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, beneficiary, token_id) = setup(&env);
+    client.initialize_vesting(&admin);
+
+    // Mint tokens to the contract
+    let str_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
+    str_client.mint(&client.address, &5000);
+
+    let start = 1000;
+    client.create_schedule(&admin, &beneficiary, &token_id, &1000, &start, &0, &1000);
+
+    // Claim 500 at t=1500
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+    client.claim_vesting(&beneficiary, &admin, &0);
+
+    // Amend: Reduce total to 800 (still > 500 claimed)
+    client.amend_schedule(&admin, &beneficiary, &0, &800, &start, &0, &1000);
+
+    let schedule = client.get_schedule(&admin, &0);
+    assert_eq!(schedule.total_amount, 800);
+    assert_eq!(schedule.claimed_amount, 500);
+}
+
+#[test]
+fn amend_schedule_too_low_amount_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, beneficiary, token_id) = setup(&env);
+    client.initialize_vesting(&admin);
+
+    let str_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
+    str_client.mint(&client.address, &1000);
+
+    client.create_schedule(&admin, &beneficiary, &token_id, &1000, &1000, &0, &1000);
+
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+    client.claim_vesting(&beneficiary, &admin, &0); // claimed 500
+
+    // Try to reduce total to 400 (claimed is 500)
+    let r = client.try_amend_schedule(&admin, &beneficiary, &0, &400, &1000, &0, &1000);
+    assert!(r.is_err());
+}
+
+#[test]
+fn amend_schedule_invalid_params_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, beneficiary, token_id) = setup(&env);
+    client.initialize_vesting(&admin);
+    client.create_schedule(&admin, &beneficiary, &token_id, &1000, &1000, &0, &1000);
+
+    // Zero duration
+    let r = client.try_amend_schedule(&admin, &beneficiary, &0, &1000, &1000, &0, &0);
+    assert!(r.is_err());
+
+    // Cliff > Duration
+    let r2 = client.try_amend_schedule(&admin, &beneficiary, &0, &1000, &1000, &2000, &1000);
+    assert!(r2.is_err());
+}
+
+#[test]
+fn amend_cancelled_schedule_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, beneficiary, token_id) = setup(&env);
+    client.initialize_vesting(&admin);
+    client.create_schedule(&admin, &beneficiary, &token_id, &1000, &1000, &0, &1000);
+
+    client.cancel_schedule(&admin, &beneficiary, &0);
+
+    let r = client.try_amend_schedule(&admin, &beneficiary, &0, &2000, &1000, &0, &1000);
+    assert!(r.is_err());
+}
+
+#[test]
+fn amend_non_existent_schedule_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, beneficiary, _token_id) = setup(&env);
+    client.initialize_vesting(&admin);
+
+    let r = client.try_amend_schedule(&admin, &beneficiary, &99, &1000, &1000, &0, &1000);
+    assert!(r.is_err());
+}
