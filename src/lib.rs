@@ -786,15 +786,16 @@ impl RevoraRevenueShare {
     ///
     /// ### Parameters
     /// - `caller`: The address of the admin (must match initialized admin).
-    pub fn pause_admin(env: Env, caller: Address) {
+    pub fn pause_admin(env: Env, caller: Address) -> Result<(), RevoraError> {
         caller.require_auth();
         let admin: Address =
-            env.storage().persistent().get(&DataKey::Admin).expect("admin not set");
+            env.storage().persistent().get(&DataKey::Admin).ok_or(RevoraError::NotInitialized)?;
         if caller != admin {
-            panic!("not admin");
+            return Err(RevoraError::NotAuthorized);
         }
         env.storage().persistent().set(&DataKey::Paused, &true);
         env.events().publish((EVENT_PAUSED, caller.clone()), ());
+        Ok(())
     }
 
     /// Unpause the contract (Admin only).
@@ -804,15 +805,16 @@ impl RevoraRevenueShare {
     ///
     /// ### Parameters
     /// - `caller`: The address of the admin (must match initialized admin).
-    pub fn unpause_admin(env: Env, caller: Address) {
+    pub fn unpause_admin(env: Env, caller: Address) -> Result<(), RevoraError> {
         caller.require_auth();
         let admin: Address =
-            env.storage().persistent().get(&DataKey::Admin).expect("admin not set");
+            env.storage().persistent().get(&DataKey::Admin).ok_or(RevoraError::NotInitialized)?;
         if caller != admin {
-            panic!("not admin");
+            return Err(RevoraError::NotAuthorized);
         }
         env.storage().persistent().set(&DataKey::Paused, &false);
         env.events().publish((EVENT_UNPAUSED, caller.clone()), ());
+        Ok(())
     }
 
     /// Pause the contract (Safety role only).
@@ -822,15 +824,16 @@ impl RevoraRevenueShare {
     ///
     /// ### Parameters
     /// - `caller`: The address of the safety role (must match initialized safety address).
-    pub fn pause_safety(env: Env, caller: Address) {
+    pub fn pause_safety(env: Env, caller: Address) -> Result<(), RevoraError> {
         caller.require_auth();
         let safety: Address =
-            env.storage().persistent().get(&DataKey::Safety).expect("safety not set");
+            env.storage().persistent().get(&DataKey::Safety).ok_or(RevoraError::NotInitialized)?;
         if caller != safety {
-            panic!("not safety");
+            return Err(RevoraError::NotAuthorized);
         }
         env.storage().persistent().set(&DataKey::Paused, &true);
         env.events().publish((EVENT_PAUSED, caller.clone()), ());
+        Ok(())
     }
 
     /// Unpause the contract (Safety role only).
@@ -840,15 +843,16 @@ impl RevoraRevenueShare {
     ///
     /// ### Parameters
     /// - `caller`: The address of the safety role (must match initialized safety address).
-    pub fn unpause_safety(env: Env, caller: Address) {
+    pub fn unpause_safety(env: Env, caller: Address) -> Result<(), RevoraError> {
         caller.require_auth();
         let safety: Address =
-            env.storage().persistent().get(&DataKey::Safety).expect("safety not set");
+            env.storage().persistent().get(&DataKey::Safety).ok_or(RevoraError::NotInitialized)?;
         if caller != safety {
-            panic!("not safety");
+            return Err(RevoraError::NotAuthorized);
         }
         env.storage().persistent().set(&DataKey::Paused, &false);
         env.events().publish((EVENT_UNPAUSED, caller.clone()), ());
+        Ok(())
     }
 
     /// Query the paused state of the contract.
@@ -3044,7 +3048,7 @@ impl RevoraRevenueShare {
     /// Emits event. Claim and read-only functions remain allowed.
     /// If multisig is initialized, this function is disabled in favor of execute_action(Freeze).
     pub fn freeze(env: Env) -> Result<(), RevoraError> {
-        if env.storage().persistent().has(&DataKey::MultisigThreshold) {
+        if env.storage().persistent().has(&DataKey::MultisigThreshold) -> Result<(), RevoraError> {
             return Err(RevoraError::LimitReached);
         }
         let key = DataKey::Admin;

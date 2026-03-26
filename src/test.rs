@@ -376,9 +376,9 @@ fn multiple_revenue_reports_same_offering() {
     let token = Address::generate(&env);
 
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &token, &0);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &10_000, &1, &false);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &20_000, &2, &false);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &30_000, &3, &false);
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &10_000, &1, &false).unwrap();
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &20_000, &2, &false).unwrap();
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &30_000, &3, &false).unwrap();
 
     let events = env.events().all();
     assert_eq!(events.len(), 13);
@@ -477,8 +477,8 @@ fn same_issuer_different_tokens() {
 
     client.register_offering(&issuer, &symbol_short!("def"), &token_x, &1_000, &token_x, &0);
     client.register_offering(&issuer, &symbol_short!("def"), &token_y, &2_000, &token_y, &0);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token_x, &token_x, &500_000, &1, &false);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token_y, &token_y, &750_000, &1, &false);
+    client.report_revenue(&issuer, &symbol_short!("def"), &token_x, &token_x, &500_000, &1, &false).unwrap();
+    client.report_revenue(&issuer, &symbol_short!("def"), &token_y, &token_y, &750_000, &1, &false).unwrap();
 
     let events = env.events().all();
     assert_eq!(events.len(), 10);
@@ -560,7 +560,7 @@ fn topic_symbols_are_distinct() {
     let token = Address::generate(&env);
 
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &token, &0);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &1_000_000, &1, &false);
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &1_000_000, &1, &false).unwrap();
 
     let empty_bl = Vec::<Address>::new(&env);
     assert_eq!(
@@ -610,7 +610,7 @@ fn rev_rep_topics_include_token_address() {
     let token = Address::generate(&env);
 
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &token, &0);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &999, &7, &false);
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &999, &7, &false).unwrap();
 
     let empty_bl = Vec::<Address>::new(&env);
     assert_eq!(
@@ -715,7 +715,7 @@ fn zero_amount_revenue_report() {
     let token = Address::generate(&env);
 
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &token, &0);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &0, &1, &false);
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &0, &1, &false).unwrap();
 
     let empty_bl = Vec::<Address>::new(&env);
     assert_eq!(
@@ -1027,7 +1027,7 @@ fn get_revenue_range_chunk_matches_full_sum() {
 
     // Report revenue for periods 1..=10
     for p in 1u64..=10u64 {
-        client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &100i128, &p, &false);
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &100i128, &p, &false).unwrap();
     }
 
     // Full sum
@@ -1075,7 +1075,7 @@ fn pending_periods_page_and_claimable_chunk_consistent() {
     }
 
     // Set holder share
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &1000u32);
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &1000u32).unwrap();
 
     // get_pending_periods full
     let full = client.get_pending_periods(&issuer, &symbol_short!("def"), &token, &holder);
@@ -1328,6 +1328,7 @@ fn add_marks_investor_as_blacklisted() {
     env.mock_all_auths();
     let client = make_client(&env);
     let admin = Address::generate(&env);
+    client.initialize(&admin, &None::<Address>, &None::<bool>);
     let issuer = admin.clone();
 
     let token = Address::generate(&env);
@@ -1338,7 +1339,7 @@ fn add_marks_investor_as_blacklisted() {
     let issuer = admin.clone();
 
     assert!(!client.is_blacklisted(&issuer, &symbol_short!("def"), &token, &investor));
-    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
     assert!(client.is_blacklisted(&issuer, &symbol_short!("def"), &token, &investor));
 }
 
@@ -1348,6 +1349,7 @@ fn remove_unmarks_investor() {
     env.mock_all_auths();
     let client = make_client(&env);
     let admin = Address::generate(&env);
+    client.initialize(&admin, &None::<Address>, &None::<bool>);
     let issuer = admin.clone();
 
     let token = Address::generate(&env);
@@ -1357,8 +1359,8 @@ fn remove_unmarks_investor() {
     let investor = Address::generate(&env);
     let issuer = admin.clone();
 
-    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
-    client.blacklist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
+    client.blacklist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
     assert!(!client.is_blacklisted(&issuer, &symbol_short!("def"), &token, &investor));
 }
 
@@ -1377,9 +1379,9 @@ fn get_blacklist_returns_all_blocked_investors() {
     let inv_b = Address::generate(&env);
     let inv_c = Address::generate(&env);
 
-    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &inv_a);
-    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &inv_b);
-    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &inv_c);
+    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &inv_a).unwrap();
+    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &inv_b).unwrap();
+    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &inv_c).unwrap();
 
     let list = client.get_blacklist(&issuer, &symbol_short!("def"), &token);
     assert_eq!(list.len(), 3);
@@ -1415,8 +1417,8 @@ fn double_add_is_idempotent() {
     let investor = Address::generate(&env);
     let issuer = admin.clone();
 
-    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
-    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
+    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
 
     assert_eq!(client.get_blacklist(&issuer, &symbol_short!("def"), &token).len(), 1);
 }
@@ -1435,7 +1437,7 @@ fn remove_nonexistent_is_idempotent() {
     let investor = Address::generate(&env);
     let issuer = admin.clone();
 
-    client.blacklist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor); // must not panic
+    client.blacklist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap(); // must not panic
     assert!(!client.is_blacklisted(&issuer, &symbol_short!("def"), &token, &investor));
 }
 
@@ -1453,7 +1455,7 @@ fn blacklist_is_scoped_per_offering() {
     let token_b = Address::generate(&env);
     let investor = Address::generate(&env);
 
-    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token_a, &investor);
+    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token_a, &investor).unwrap();
 
     assert!(client.is_blacklisted(&issuer, &symbol_short!("def"), &token_a, &investor));
     assert!(!client.is_blacklisted(&issuer, &symbol_short!("def"), &token_b, &investor));
@@ -1471,9 +1473,9 @@ fn removing_from_one_offering_does_not_affect_another() {
     let token_b = Address::generate(&env);
     let investor = Address::generate(&env);
 
-    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token_a, &investor);
-    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token_b, &investor);
-    client.blacklist_remove(&admin, &issuer, &symbol_short!("def"), &token_a, &investor);
+    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token_a, &investor).unwrap();
+    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token_b, &investor).unwrap();
+    client.blacklist_remove(&admin, &issuer, &symbol_short!("def"), &token_a, &investor).unwrap();
 
     assert!(!client.is_blacklisted(&issuer, &symbol_short!("def"), &token_a, &investor));
     assert!(client.is_blacklisted(&issuer, &symbol_short!("def"), &token_b, &investor));
@@ -1496,7 +1498,7 @@ fn blacklist_add_emits_event() {
     let issuer = admin.clone();
 
     let before = env.events().all().len();
-    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
     assert!(env.events().all().len() > before);
 }
 
@@ -1514,9 +1516,9 @@ fn blacklist_remove_emits_event() {
     let investor = Address::generate(&env);
     let issuer = admin.clone();
 
-    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
     let before = env.events().all().len();
-    client.blacklist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.blacklist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
     assert!(env.events().all().len() > before);
 }
 
@@ -1536,7 +1538,7 @@ fn blacklisted_investor_excluded_from_distribution_filter() {
     let allowed = Address::generate(&env);
     let blocked = Address::generate(&env);
 
-    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &blocked);
+    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &blocked).unwrap();
 
     let investors = [allowed.clone(), blocked.clone()];
     let eligible = investors
@@ -1561,7 +1563,7 @@ fn blacklist_takes_precedence_over_whitelist() {
     let investor = Address::generate(&env);
     let issuer = admin.clone();
 
-    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
 
     // Even if investor were on a whitelist, blacklist must win
     assert!(client.is_blacklisted(&issuer, &symbol_short!("def"), &token, &investor));
@@ -1614,7 +1616,7 @@ fn whitelist_add_marks_investor_as_whitelisted() {
     let investor = Address::generate(&env);
 
     assert!(!client.is_whitelisted(&issuer, &symbol_short!("def"), &token, &investor));
-    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
     assert!(client.is_whitelisted(&issuer, &symbol_short!("def"), &token, &investor));
 }
 
@@ -1629,8 +1631,8 @@ fn whitelist_remove_unmarks_investor() {
     let token = Address::generate(&env);
     let investor = Address::generate(&env);
 
-    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
-    client.whitelist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
+    client.whitelist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
     assert!(!client.is_whitelisted(&issuer, &symbol_short!("def"), &token, &investor));
 }
 
@@ -1647,9 +1649,9 @@ fn get_whitelist_returns_all_approved_investors() {
     let inv_b = Address::generate(&env);
     let inv_c = Address::generate(&env);
 
-    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &inv_a);
-    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &inv_b);
-    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &inv_c);
+    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &inv_a).unwrap();
+    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &inv_b).unwrap();
+    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &inv_c).unwrap();
 
     let list = client.get_whitelist(&issuer, &symbol_short!("def"), &token);
     assert_eq!(list.len(), 3);
@@ -1696,8 +1698,8 @@ fn whitelist_double_add_is_idempotent() {
     let token = Address::generate(&env);
     let investor = Address::generate(&env);
 
-    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
-    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
+    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
 
     assert_eq!(client.get_whitelist(&issuer, &symbol_short!("def"), &token).len(), 1);
 }
@@ -1713,7 +1715,7 @@ fn whitelist_remove_nonexistent_is_idempotent() {
     let token = Address::generate(&env);
     let investor = Address::generate(&env);
 
-    client.whitelist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor); // must not panic
+    client.whitelist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap(); // must not panic
     assert!(!client.is_whitelisted(&issuer, &symbol_short!("def"), &token, &investor));
 }
 
@@ -1731,7 +1733,7 @@ fn whitelist_is_scoped_per_offering() {
     let token_b = Address::generate(&env);
     let investor = Address::generate(&env);
 
-    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token_a, &investor);
+    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token_a, &investor).unwrap();
 
     assert!(client.is_whitelisted(&issuer, &symbol_short!("def"), &token_a, &investor));
     assert!(!client.is_whitelisted(&issuer, &symbol_short!("def"), &token_b, &investor));
@@ -1749,9 +1751,9 @@ fn whitelist_removing_from_one_offering_does_not_affect_another() {
     let token_b = Address::generate(&env);
     let investor = Address::generate(&env);
 
-    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token_a, &investor);
-    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token_b, &investor);
-    client.whitelist_remove(&admin, &issuer, &symbol_short!("def"), &token_a, &investor);
+    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token_a, &investor).unwrap();
+    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token_b, &investor).unwrap();
+    client.whitelist_remove(&admin, &issuer, &symbol_short!("def"), &token_a, &investor).unwrap();
 
     assert!(!client.is_whitelisted(&issuer, &symbol_short!("def"), &token_a, &investor));
     assert!(client.is_whitelisted(&issuer, &symbol_short!("def"), &token_b, &investor));
@@ -1771,7 +1773,7 @@ fn whitelist_add_emits_event() {
     let investor = Address::generate(&env);
 
     let before = env.events().all().len();
-    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
     assert!(env.events().all().len() > before);
 }
 
@@ -1786,9 +1788,9 @@ fn whitelist_remove_emits_event() {
     let token = Address::generate(&env);
     let investor = Address::generate(&env);
 
-    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
     let before = env.events().all().len();
-    client.whitelist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.whitelist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
     assert!(env.events().all().len() > before);
 }
 
@@ -1806,7 +1808,7 @@ fn whitelist_enabled_only_includes_whitelisted_investors() {
     let whitelisted = Address::generate(&env);
     let not_listed = Address::generate(&env);
 
-    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &whitelisted);
+    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &whitelisted).unwrap();
 
     let investors = [whitelisted.clone(), not_listed.clone()];
     let whitelist_enabled = client.is_whitelist_enabled(&issuer, &symbol_short!("def"), &token);
@@ -1877,8 +1879,8 @@ fn blacklist_overrides_whitelist() {
     let investor = Address::generate(&env);
 
     // Add to both whitelist and blacklist
-    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
-    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
+    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
 
     // Blacklist must take precedence
     let whitelist_enabled = client.is_whitelist_enabled(&issuer, &symbol_short!("def"), &token);
@@ -1948,7 +1950,7 @@ fn large_whitelist_operations() {
     for _ in 0..50 {
         let inv = Address::generate(&env);
         let issuer = inv.clone();
-        client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &inv);
+        client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &inv).unwrap();
         investors.push_back(inv);
     }
 
@@ -1980,13 +1982,13 @@ fn repeated_whitelist_operations_on_same_address() {
     let investor = Address::generate(&env);
 
     // Add, remove, add again
-    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
     assert!(client.is_whitelisted(&issuer, &symbol_short!("def"), &token, &investor));
 
-    client.whitelist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.whitelist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
     assert!(!client.is_whitelisted(&issuer, &symbol_short!("def"), &token, &investor));
 
-    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
     assert!(client.is_whitelisted(&issuer, &symbol_short!("def"), &token, &investor));
 }
 
@@ -2005,10 +2007,10 @@ fn whitelist_enabled_when_non_empty() {
 
     assert!(!client.is_whitelist_enabled(&issuer, &symbol_short!("def"), &token));
 
-    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
     assert!(client.is_whitelist_enabled(&issuer, &symbol_short!("def"), &token));
 
-    client.whitelist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.whitelist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
     assert!(!client.is_whitelist_enabled(&issuer, &symbol_short!("def"), &token));
 }
 
@@ -2068,7 +2070,7 @@ fn single_report_is_persisted() {
     let issuer = Address::generate(&env);
     let token = Address::generate(&env);
 
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &5_000, &1, &false);
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &5_000, &1, &false).unwrap();
     assert_eq!(client.get_revenue_by_period(&issuer, &symbol_short!("def"), &token, &1), 5_000);
 }
 
@@ -2096,8 +2098,8 @@ fn multiple_reports_same_period_accumulate() {
     let issuer = Address::generate(&env);
     let token = Address::generate(&env);
 
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &3_000, &7, &false);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &2_000, &7, &true); // Use true for override to test accumulation if intended, but wait...
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &3_000, &7, &false).unwrap();
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &2_000, &7, &true).unwrap(); // Use true for override to test accumulation if intended, but wait...
                                                                                               // Actually, report_revenue in lib.rs now OVERWRITES if override_existing is true.
                                                                                               // beda819 wanted accumulation.
                                                                                               // If I want accumulation, I should change lib.rs to accumulate even on override?
@@ -2112,8 +2114,8 @@ fn multiple_reports_same_period_accumulate() {
     // If I want to support beda819's "accumulation", I should perhaps NOT use override_existing for accumulation.
     // But the tests in beda819 were:
     /*
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &3_000, &7, &false);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &2_000, &7, &false);
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &3_000, &7, &false).unwrap();
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &2_000, &7, &false).unwrap();
     assert_eq!(client.get_revenue_by_period(&issuer, &symbol_short!("def"), &token, &7), 5_000);
     */
     // This implies that multiple reports for the same period SHOULD accumulate.
@@ -2152,9 +2154,9 @@ fn multiple_reports_same_period_accumulate_is_disabled() {
     let issuer = Address::generate(&env);
     let token = Address::generate(&env);
 
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &3_000, &7, &false);
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &3_000, &7, &false).unwrap();
     // Second report without override should fail or just emit REJECTED event depending on implementation.
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &2_000, &7, &false);
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &2_000, &7, &false).unwrap();
     assert_eq!(client.get_revenue_by_period(&issuer, &symbol_short!("def"), &token, &7), 3_000);
 }
 
@@ -2178,8 +2180,8 @@ fn get_revenue_range_sums_periods() {
     let token = Address::generate(&env);
     let payout_asset = Address::generate(&env);
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &payout_asset, &0);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &100, &1, &false);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &200, &2, &false);
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &100, &1, &false).unwrap();
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &200, &2, &false).unwrap();
     assert_eq!(client.get_revenue_range(&issuer, &symbol_short!("def"), &token, &1, &2), 300);
 }
 
@@ -2216,7 +2218,7 @@ fn gas_characterization_report_revenue_with_large_blacklist() {
     let issuer = admin.clone();
 
     env.mock_all_auths();
-    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &Address::generate(&env));
+    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &Address::generate(&env)).unwrap();
 
     client.report_revenue(
         &issuer,
@@ -2239,7 +2241,7 @@ fn revenue_matches_event_amount() {
     let token = Address::generate(&env);
     let amount: i128 = 42_000;
 
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &amount, &5, &false);
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &amount, &5, &false).unwrap();
 
     assert_eq!(client.get_revenue_by_period(&issuer, &symbol_short!("def"), &token, &5), amount);
     assert!(!env.events().all().is_empty());
@@ -2253,7 +2255,7 @@ fn large_period_range_sums_correctly() {
     let issuer = Address::generate(&env);
     let token = Address::generate(&env);
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &token, &0);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &1_000, &1, &false);
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &1_000, &1, &false).unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -2460,9 +2462,9 @@ fn audit_summary_aggregates_revenue_and_count() {
     let token = Address::generate(&env);
     let payout_asset = Address::generate(&env);
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &100, &1, &false);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &200, &2, &false);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &300, &3, &false);
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &100, &1, &false).unwrap();
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &200, &2, &false).unwrap();
+    client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &300, &3, &false).unwrap();
     let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
     assert_eq!(summary.clone().unwrap().total_revenue, 600);
     assert_eq!(summary.clone().unwrap().report_count, 3);
@@ -2853,7 +2855,7 @@ fn set_holder_share_stores_share() {
     let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &2_500); // 25%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &2_500).unwrap(); // 25%
     assert_eq!(client.get_holder_share(&issuer, &symbol_short!("def"), &token, &holder), 2_500);
 }
 
@@ -2862,8 +2864,8 @@ fn set_holder_share_updates_existing() {
     let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &2_500);
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000);
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &2_500).unwrap();
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000).unwrap();
     assert_eq!(client.get_holder_share(&issuer, &symbol_short!("def"), &token, &holder), 5_000);
 }
 
@@ -2910,7 +2912,7 @@ fn set_holder_share_emits_event() {
     let holder = Address::generate(&env);
 
     let before = env.events().all().len();
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &2_500);
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &2_500).unwrap();
     assert!(env.events().all().len() > before);
 }
 
@@ -2928,7 +2930,7 @@ fn claim_single_period() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000); // 50%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000).unwrap(); // 50%
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
 
     let payout = client.claim(&holder, &issuer, &symbol_short!("def"), &token, &0);
@@ -2941,7 +2943,7 @@ fn claim_multiple_periods_aggregated() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &2_000); // 20%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &2_000).unwrap(); // 20%
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &200_000, &2);
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &300_000, &3);
@@ -2958,7 +2960,7 @@ fn claim_max_periods_zero_claims_all() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000); // 100%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000).unwrap(); // 100%
     for i in 1..=5_u64 {
         client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &10_000, &i);
     }
@@ -2972,7 +2974,7 @@ fn claim_partial_then_rest() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000); // 100%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000).unwrap(); // 100%
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &200_000, &2);
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &300_000, &3);
@@ -2993,7 +2995,7 @@ fn claim_no_double_counting() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000); // 100%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000).unwrap(); // 100%
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
 
     let payout1 = client.claim(&holder, &issuer, &symbol_short!("def"), &token, &0);
@@ -3009,7 +3011,7 @@ fn claim_advances_index_correctly() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000); // 50%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000).unwrap(); // 50%
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &200_000, &2);
 
@@ -3029,7 +3031,7 @@ fn claim_emits_event() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000);
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000).unwrap();
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
 
     let before = env.events().all().len();
@@ -3042,11 +3044,11 @@ fn claim_fails_for_blacklisted_holder() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000);
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000).unwrap();
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
 
     // Blacklist the holder
-    client.blacklist_add(&issuer, &issuer, &symbol_short!("def"), &token, &holder);
+    client.blacklist_add(&issuer, &issuer, &symbol_short!("def"), &token, &holder).unwrap();
 
     let result = client.try_claim(&holder, &issuer, &symbol_short!("def"), &token, &0);
     assert!(result.is_err());
@@ -3057,7 +3059,7 @@ fn claim_fails_when_no_pending_periods() {
     let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000);
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000).unwrap();
     // No deposits made
     let result = client.try_claim(&holder, &issuer, &symbol_short!("def"), &token, &0);
     assert!(result.is_err());
@@ -3080,7 +3082,7 @@ fn claim_sparse_period_ids() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000); // 100%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000).unwrap(); // 100%
 
     // Non-sequential period IDs
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &50_000, &10);
@@ -3097,8 +3099,8 @@ fn claim_multiple_holders_same_periods() {
     let holder_a = Address::generate(&env);
     let holder_b = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder_a, &3_000); // 30%
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder_b, &2_000); // 20%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder_a, &3_000).unwrap(); // 30%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder_b, &2_000).unwrap(); // 20%
 
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &200_000, &2);
@@ -3118,7 +3120,7 @@ fn claim_with_max_periods_cap() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000); // 100%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000).unwrap(); // 100%
 
     // Deposit 5 periods
     for i in 1..=5_u64 {
@@ -3142,7 +3144,7 @@ fn claim_zero_revenue_periods_still_advance() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000); // 100%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000).unwrap(); // 100%
 
     // Deposit minimal-value periods then a larger one (#35: amount must be > 0).
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &1, &1);
@@ -3183,7 +3185,7 @@ fn get_pending_periods_returns_unclaimed() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000);
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000).unwrap();
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &10);
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &200_000, &20);
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &300_000, &30);
@@ -3200,7 +3202,7 @@ fn get_pending_periods_after_partial_claim() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000);
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000).unwrap();
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &200_000, &2);
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &300_000, &3);
@@ -3218,7 +3220,7 @@ fn get_pending_periods_empty_after_full_claim() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000);
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000).unwrap();
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
 
     client.claim(&holder, &issuer, &symbol_short!("def"), &token, &0);
@@ -3241,7 +3243,7 @@ fn get_claimable_returns_correct_amount() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &2_500); // 25%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &2_500).unwrap(); // 25%
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &200_000, &2);
 
@@ -3254,7 +3256,7 @@ fn get_claimable_after_partial_claim() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000); // 100%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000).unwrap(); // 100%
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &200_000, &2);
 
@@ -3279,7 +3281,7 @@ fn get_claimable_returns_zero_after_full_claim() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000);
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000).unwrap();
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
 
     client.claim(&holder, &issuer, &symbol_short!("def"), &token, &0);
@@ -3301,8 +3303,8 @@ fn multiple_holders_independent_claim_indices() {
     let holder_a = Address::generate(&env);
     let holder_b = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder_a, &5_000); // 50%
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder_b, &3_000); // 30%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder_a, &5_000).unwrap(); // 50%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder_b, &3_000).unwrap(); // 30%
 
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &200_000, &2);
@@ -3331,7 +3333,7 @@ fn claim_after_holder_share_change() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000); // 50%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000).unwrap(); // 50%
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
 
     // Claim at 50%
@@ -3339,7 +3341,7 @@ fn claim_after_holder_share_change() {
     assert_eq!(payout1, 50_000);
 
     // Change share to 25% and deposit new period
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &2_500);
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &2_500).unwrap();
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &2);
 
     // Claim at new 25% rate
@@ -3354,7 +3356,7 @@ fn claim_many_periods_stress() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &1_000); // 10%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &1_000).unwrap(); // 10%
 
     // Deposit 50 periods (MAX_CLAIM_PERIODS)
     for i in 1..=50_u64 {
@@ -3377,7 +3379,7 @@ fn claim_exceeding_max_is_capped() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000); // 100%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000).unwrap(); // 100%
 
     // Deposit 55 periods (more than MAX_CLAIM_PERIODS of 50)
     for i in 1..=55_u64 {
@@ -3401,7 +3403,7 @@ fn get_claimable_stress_many_periods() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000); // 50%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000).unwrap(); // 50%
 
     let period_count = 40_u64;
     let amount_per_period: i128 = 10_000;
@@ -3429,7 +3431,7 @@ fn claim_with_rounding() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &3_333); // 33.33%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &3_333).unwrap(); // 33.33%
 
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100, &1);
 
@@ -3443,7 +3445,7 @@ fn claim_single_unit_revenue() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000); // 100%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000).unwrap(); // 100%
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &1, &1);
 
     let payout = client.claim(&holder, &issuer, &symbol_short!("def"), &token, &0);
@@ -3454,7 +3456,7 @@ fn claim_single_unit_revenue() {
 fn deposit_then_claim_then_deposit_then_claim() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000); // 100%
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000).unwrap(); // 100%
 
     // Round 1
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
@@ -3484,8 +3486,8 @@ fn offering_isolation_claims_independent() {
 
     let holder = Address::generate(&env);
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000); // 50% of offering A
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token_b, &holder, &10_000); // 100% of offering B
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000).unwrap(); // 50% of offering A
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token_b, &holder, &10_000).unwrap(); // 100% of offering B
 
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token_b, &pt_b, &50_000, &1);
@@ -3535,7 +3537,7 @@ fn claim_before_delay_returns_claim_delay_not_elapsed() {
     let holder = Address::generate(&env);
 
     env.ledger().with_mut(|li| li.timestamp = 1000);
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000);
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000).unwrap();
     client.set_claim_delay(&issuer, &symbol_short!("def"), &token, &100);
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
     // Still at 1000, delay 100 -> claimable at 1100
@@ -3549,7 +3551,7 @@ fn claim_after_delay_succeeds() {
     let holder = Address::generate(&env);
 
     env.ledger().with_mut(|li| li.timestamp = 1000);
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000);
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000).unwrap();
     client.set_claim_delay(&issuer, &symbol_short!("def"), &token, &100);
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
     env.ledger().with_mut(|li| li.timestamp = 1100);
@@ -3564,7 +3566,7 @@ fn get_claimable_respects_delay() {
     let holder = Address::generate(&env);
 
     env.ledger().with_mut(|li| li.timestamp = 2000);
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000);
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000).unwrap();
     client.set_claim_delay(&issuer, &symbol_short!("def"), &token, &500);
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
     // At 2000, deposit at 2000, claimable at 2500
@@ -3579,7 +3581,7 @@ fn claim_delay_partial_periods_only_claimable_after_delay() {
     let holder = Address::generate(&env);
 
     env.ledger().with_mut(|li| li.timestamp = 1000);
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000);
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000).unwrap();
     client.set_claim_delay(&issuer, &symbol_short!("def"), &token, &100);
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
     env.ledger().with_mut(|li| li.timestamp = 1050);
@@ -3710,7 +3712,7 @@ fn freeze_sets_flag_and_emits_event() {
     client.set_admin(&admin);
     assert!(!client.is_frozen());
     let before = env.events().all().len();
-    client.freeze();
+    client.freeze().unwrap();
     assert!(client.is_frozen());
     assert!(env.events().all().len() > before);
 }
@@ -3725,7 +3727,7 @@ fn frozen_blocks_register_offering() {
     let payout_asset = Address::generate(&env);
 
     client.set_admin(&admin);
-    client.freeze();
+    client.freeze().unwrap();
     let r = client.try_register_offering(
         &issuer,
         &symbol_short!("def"),
@@ -3744,7 +3746,7 @@ fn frozen_blocks_deposit_revenue() {
     let issuer = admin.clone();
 
     client.set_admin(&admin);
-    client.freeze();
+    client.freeze().unwrap();
     let r = client.try_deposit_revenue(
         &issuer,
         &symbol_short!("def"),
@@ -3765,7 +3767,7 @@ fn frozen_blocks_set_holder_share() {
     let holder = Address::generate(&env);
 
     client.set_admin(&admin);
-    client.freeze();
+    client.freeze().unwrap();
     let r = client.try_set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &2_500);
     assert!(r.is_err());
 }
@@ -3777,10 +3779,10 @@ fn frozen_allows_claim() {
     let admin = Address::generate(&env);
     let issuer = admin.clone();
 
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000);
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000).unwrap();
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
     client.set_admin(&admin);
-    client.freeze();
+    client.freeze().unwrap();
 
     let payout = client.claim(&holder, &issuer, &symbol_short!("def"), &token, &0);
     assert_eq!(payout, 100_000);
@@ -4548,7 +4550,7 @@ fn issuer_transfer_blocked_when_frozen() {
     let issuer = admin.clone();
 
     client.set_admin(&admin);
-    client.freeze();
+    client.freeze().unwrap();
     let result =
         client.try_propose_issuer_transfer(&issuer, &symbol_short!("def"), &token, &new_issuer);
     assert!(result.is_err());
@@ -4959,7 +4961,7 @@ fn issuer_transfer_accept_blocked_when_frozen() {
     client.propose_issuer_transfer(&issuer, &symbol_short!("def"), &token, &new_issuer);
 
     client.set_admin(&admin);
-    client.freeze();
+    client.freeze().unwrap();
 
     let result = client.try_accept_issuer_transfer(&issuer, &symbol_short!("def"), &token);
     assert!(result.is_err());
@@ -4975,7 +4977,7 @@ fn issuer_transfer_cancel_blocked_when_frozen() {
     client.propose_issuer_transfer(&issuer, &symbol_short!("def"), &token, &new_issuer);
 
     client.set_admin(&admin);
-    client.freeze();
+    client.freeze().unwrap();
 
     let result = client.try_cancel_issuer_transfer(&issuer, &symbol_short!("def"), &token);
     assert!(result.is_err());
@@ -5088,7 +5090,7 @@ fn issuer_transfer_holders_can_still_claim() {
     let new_issuer = Address::generate(&env);
 
     // Setup: deposit and set share before transfer
-    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000);
+    client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &10_000).unwrap();
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
 
     // Transfer issuer
@@ -5115,7 +5117,7 @@ fn issuer_transfer_then_new_deposits_and_claims_work() {
     client.accept_issuer_transfer(&issuer, &symbol_short!("def"), &token);
 
     // New issuer sets share and deposits
-    client.set_holder_share(&new_issuer, &symbol_short!("def"), &token, &holder, &5_000);
+    client.set_holder_share(&new_issuer, &symbol_short!("def"), &token, &holder, &5_000).unwrap();
     client.deposit_revenue(
         &new_issuer,
         &symbol_short!("def"),
@@ -5242,10 +5244,10 @@ fn testnet_mode_blacklist_operations_unaffected() {
     client.set_testnet_mode(&true);
 
     // Blacklist operations should work normally
-    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
     assert!(client.is_blacklisted(&issuer, &symbol_short!("def"), &token, &investor));
 
-    client.blacklist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    client.blacklist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
     assert!(!client.is_blacklisted(&issuer, &symbol_short!("def"), &token, &investor));
 }
 
@@ -5310,15 +5312,15 @@ fn pause_unpause_idempotence_and_events() {
     assert!(!client.is_paused());
 
     // Pause twice (idempotent)
-    client.pause_admin(&admin);
+    client.pause_admin(&admin).unwrap();
     assert!(client.is_paused());
-    client.pause_admin(&admin);
+    client.pause_admin(&admin).unwrap();
     assert!(client.is_paused());
 
     // Unpause twice (idempotent)
-    client.unpause_admin(&admin);
+    client.unpause_admin(&admin).unwrap();
     assert!(!client.is_paused());
-    client.unpause_admin(&admin);
+    client.unpause_admin(&admin).unwrap();
     assert!(!client.is_paused());
 
     // Verify events were emitted
@@ -5337,7 +5339,7 @@ fn register_blocked_while_paused() {
     let payout_asset = Address::generate(&env);
 
     client.initialize(&admin, &None::<Address>, &None::<bool>);
-    client.pause_admin(&admin);
+    client.pause_admin(&admin).unwrap();
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
 }
 
@@ -5355,7 +5357,7 @@ fn report_blocked_while_paused() {
     client.initialize(&admin, &None::<Address>, &None::<bool>);
     // Register before pausing
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
-    client.pause_admin(&admin);
+    client.pause_admin(&admin).unwrap();
     client.report_revenue(
         &issuer,
         &symbol_short!("def"),
@@ -5382,11 +5384,11 @@ fn pause_safety_role_works() {
     assert!(!client.is_paused());
 
     // Safety can pause
-    client.pause_safety(&safety);
+    client.pause_safety(&safety).unwrap();
     assert!(client.is_paused());
 
     // Safety can unpause
-    client.unpause_safety(&safety);
+    client.unpause_safety(&safety).unwrap();
     assert!(!client.is_paused());
 }
 
@@ -5405,7 +5407,7 @@ fn blacklist_add_blocked_while_paused() {
     let issuer = admin.clone();
 
     client.initialize(&admin, &None::<Address>, &None::<bool>);
-    client.pause_admin(&admin);
+    client.pause_admin(&admin).unwrap();
     assert!(client.try_blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).is_err());
 }
 
@@ -5424,7 +5426,7 @@ fn blacklist_remove_blocked_while_paused() {
     let issuer = admin.clone();
 
     client.initialize(&admin, &None::<Address>, &None::<bool>);
-    client.pause_admin(&admin);
+    client.pause_admin(&admin).unwrap();
     assert!(client.try_blacklist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor).is_err());
 }
 #[test]
@@ -5639,7 +5641,7 @@ fn calculate_distribution_blacklisted_holder_panics() {
 
     let holder = Address::generate(&env);
 
-    client.blacklist_add(&issuer, &issuer, &symbol_short!("def"), &token, &holder);
+    client.blacklist_add(&issuer, &issuer, &symbol_short!("def"), &token, &holder).unwrap();
 
     client.calculate_distribution(
         &caller,
@@ -6144,7 +6146,7 @@ fn test_event_only_mode_blacklist() {
     client.initialize(&admin, &None, &Some(true));
 
     // Blacklist add should emit event but NOT persist
-    client.blacklist_add(&issuer, &issuer, &symbol_short!("def"), &token, &investor);
+    client.blacklist_add(&issuer, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
 
     let events = env.events().all();
     let bl_add_val: soroban_sdk::Val = symbol_short!("bl_add").into_val(&env);
@@ -6286,7 +6288,7 @@ fn test_set_metadata_respects_freeze() {
 
     client.initialize(&admin, &None, &None::<bool>);
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &token, &0);
-    client.freeze();
+    client.freeze().unwrap();
 
     let metadata = SdkString::from_str(&env, "ipfs://QmTest");
     let result =
@@ -6307,7 +6309,7 @@ fn test_set_metadata_respects_pause() {
 
     client.initialize(&admin, &None, &None::<bool>);
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &token, &0);
-    client.pause_admin(&admin);
+    client.pause_admin(&admin).unwrap();
 
     let metadata = SdkString::from_str(&env, "ipfs://QmTest");
     let result =
@@ -7099,9 +7101,9 @@ mod regression {
         let a = Address::generate(&env);
         let b = Address::generate(&env);
         let c = Address::generate(&env);
-        client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &a);
-        client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &b);
-        client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &c);
+        client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &a).unwrap();
+        client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &b).unwrap();
+        client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &c).unwrap();
         let list = client.get_blacklist(&issuer, &symbol_short!("def"), &token);
         assert_eq!(list.len(), 3);
         assert_eq!(list.get(0).unwrap(), a);
@@ -7123,10 +7125,10 @@ mod regression {
         let a = Address::generate(&env);
         let b = Address::generate(&env);
         let c = Address::generate(&env);
-        client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &a);
-        client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &b);
-        client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &c);
-        client.blacklist_remove(&admin, &issuer, &symbol_short!("def"), &token, &b);
+        client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &a).unwrap();
+        client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &b).unwrap();
+        client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &c).unwrap();
+        client.blacklist_remove(&admin, &issuer, &symbol_short!("def"), &token, &b).unwrap();
         let list = client.get_blacklist(&issuer, &symbol_short!("def"), &token);
         assert_eq!(list.len(), 2);
         assert_eq!(list.get(0).unwrap(), a);
@@ -7140,7 +7142,7 @@ mod regression {
         client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &200, &20);
         client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &300, &30);
         let holder = Address::generate(&env);
-        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &1_000);
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &1_000).unwrap();
         let periods = client.get_pending_periods(&issuer, &symbol_short!("def"), &token, &holder);
         assert_eq!(periods.len(), 3);
         assert_eq!(periods.get(0).unwrap(), 10);
@@ -7348,10 +7350,10 @@ mod regression {
             }
             4 => {
                 let holder = Address::generate(env);
-                client.blacklist_add(&issuer, &issuer, &symbol_short!("def"), &token, &holder);
+                client.blacklist_add(&issuer, &issuer, &symbol_short!("def"), &token, &holder).unwrap();
             }
             5 => {
-                client.blacklist_remove(&issuer, &issuer, &symbol_short!("def"), &token, &issuer);
+                client.blacklist_remove(&issuer, &issuer, &symbol_short!("def"), &token, &issuer).unwrap();
             }
             _ => {}
         }
@@ -7914,20 +7916,20 @@ mod scenarios {
         // 2. Report revenue for period 1
         // total_revenue = 1,000,000
         // distributable = 1,000,000 * 50% = 500,000
-        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &1_000_000, &1, &false);
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &1_000_000, &1, &false).unwrap();
 
         // 3. Investors set their shares for period 1 (Total supply 100)
-        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_a, &60); // 60%
-        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_b, &40); // 40%
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_a, &60).unwrap(); // 60%
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_b, &40).unwrap(); // 40%
 
         // 4. Report revenue for period 2
         // total_revenue = 2,000,000
         // distributable = 2,000,000 * 50% = 1,000,000
-        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &2_000_000, &2, &false);
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &2_000_000, &2, &false).unwrap();
 
         // 5. Investors' shares shift for period 2
-        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_a, &20); // 20%
-        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_b, &80); // 80%
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_a, &20).unwrap(); // 20%
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor_b, &80).unwrap(); // 80%
 
         // 6. Investor A claims all available periods (1 and 2)
         // expected_payout_a_p1 = 500,000 * 60 / 100 = 300,000
@@ -7978,10 +7980,10 @@ mod scenarios {
         assert!(res.is_err());
 
         // 3. Issuer successfully reports valid revenue for period 1
-        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &100_000, &1, &false);
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &100_000, &1, &false).unwrap();
 
         // 4. Investor is assigned 100% share for period 1
-        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor, &100);
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor, &100).unwrap();
 
         // 5. Investor tries to claim but delay has not elapsed
         let claim_preview = client.get_claimable(&issuer, &symbol_short!("def"), &token, &investor);
@@ -7993,7 +7995,7 @@ mod scenarios {
         // // // env.ledger().set_timestamp(env.ledger().timestamp() + 2 * 86400);
 
         // 7. Issuer corrects the revenue report for period 1 via override (changes to 50_000)
-        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &50_000, &1, &true);
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &50_000, &1, &true).unwrap();
 
         // 8. Investor successfully claims after delay and override
         let claim_preview_after = client.get_claimable(&issuer, &symbol_short!("def"), &token, &investor);
@@ -8003,11 +8005,11 @@ mod scenarios {
         assert_eq!(payout, 50_000);
 
         // 9. Issuer blacklists investor to prevent future claims
-        client.blacklist_add(&issuer, &issuer, &symbol_short!("def"), &token, &investor);
+        client.blacklist_add(&issuer, &issuer, &symbol_short!("def"), &token, &investor).unwrap();
 
         // 10. Issuer reports revenue for period 2
-        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &200_000, &2, &false);
-        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor, &100);
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &200_000, &2, &false).unwrap();
+        client.set_holder_share(&issuer, &symbol_short!("def"), &token, &investor, &100).unwrap();
 
         // 11. Investor attempts claim but is blocked by blacklist
         // // // env.ledger().set_timestamp(env.ledger().timestamp() + 2 * 86400); // pass delay
