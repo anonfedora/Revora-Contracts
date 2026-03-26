@@ -1308,19 +1308,6 @@ impl RevoraRevenueShare {
             );
         }
 
-        if !event_only {
-            // Audit log summary (#34): maintain per-offering total revenue and report count
-            let summary_key = DataKey::AuditSummary(offering_id);
-            let mut summary: AuditSummary = env
-                .storage()
-                .persistent()
-                .get(&summary_key)
-                .unwrap_or(AuditSummary { total_revenue: 0, report_count: 0 });
-            summary.total_revenue = summary.total_revenue.saturating_add(amount);
-            summary.report_count = summary.report_count.saturating_add(1);
-            env.storage().persistent().set(&summary_key, &summary);
-        }
-
         Ok(())
     }
 
