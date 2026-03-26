@@ -1489,10 +1489,6 @@ impl RevoraRevenueShare {
         env.storage().persistent().get(&count_key).unwrap_or(0)
     }
 
-    /// Return a page of offerings for `issuer`. Limit capped at MAX_PAGE_LIMIT (20).
-    /// Ordering: by registration index (creation order), deterministic (#38).
-    /// Return a page of offerings for `issuer` in `namespace`. Limit capped at MAX_PAGE_LIMIT (20).
-    /// Ordering: by registration index (creation order), deterministic (#38).
     pub fn get_offerings_page(
         env: Env,
         issuer: Address,
@@ -1517,6 +1513,87 @@ impl RevoraRevenueShare {
             let item_key = DataKey::OfferItem(tenant_id.clone(), i);
             let offering: Offering = env.storage().persistent().get(&item_key).unwrap();
             results.push_back(offering);
+        }
+
+        let next_cursor = if end < count { Some(end) } else { None };
+        (results, next_cursor)
+    }
+
+    /// Return the total number of unique issuers registered globally.
+    pub fn get_issuer_count(env: Env) -> u32 {
+        env.storage().persistent().get(&DataKey::IssuerCount).unwrap_or(0)
+    }
+
+    /// Return a page of unique issuers registered globally.
+    ///
+    /// Ordering is based on registration index (insertion order), ensuring stability
+    /// across multiple calls even as new issuers are added.
+    ///
+    /// ### Parameters
+    /// - `start`: The starting index for the page.
+    /// - `limit`: Maximum number of issuers to return (capped by `MAX_PAGE_LIMIT`).
+    ///
+    /// ### Returns
+    /// - `(Vec<Address>, Option<u32>)`: A tuple containing the page of issuer addresses
+    ///   and an optional cursor for the next page.
+    pub fn get_issuers_page(env: Env, start: u32, limit: u32) -> (Vec<Address>, Option<u32>) {
+        let count = Self::get_issuer_count(env.clone());
+        let effective_limit =
+            if limit == 0 || limit > MAX_PAGE_LIMIT { MAX_PAGE_LIMIT } else { limit };
+
+        if start >= count {
+            return (Vec::new(&env), None);
+        }
+
+        let end = core::cmp::min(start + effective_limit, count);
+        let mut results = Vec::new(&env);
+        for i in start..end {
+            let item_key = DataKey::IssuerItem(i);
+            let issuer: Address = env.storage().persistent().get(&item_key).unwrap();
+            results.push_back(issuer);
+        }
+
+        let next_cursor = if end < count { Some(end) } else { None };
+        (results, next_cursor)
+    }
+
+    /// Return the total number of namespaces for a specific issuer.
+    pub fn get_namespace_count(env: Env, issuer: Address) -> u32 {
+        env.storage().persistent().get(&DataKey::NamespaceCount(issuer)).unwrap_or(0)
+    }
+
+    /// Return a page of namespaces registered for a specific issuer.
+    ///
+    /// Ordering is based on registration index (insertion order), ensuring stability.
+    ///
+    /// ### Parameters
+    /// - `issuer`: The address of the issuer.
+    /// - `start`: The starting index for the page.
+    /// - `limit`: Maximum number of namespaces to return (capped by `MAX_PAGE_LIMIT`).
+    ///
+    /// ### Returns
+    /// - `(Vec<Symbol>, Option<u32>)`: A tuple containing the page of namespace symbols
+    ///   and an optional cursor for the next page.
+    pub fn get_namespaces_page(
+        env: Env,
+        issuer: Address,
+        start: u32,
+        limit: u32,
+    ) -> (Vec<Symbol>, Option<u32>) {
+        let count = Self::get_namespace_count(env.clone(), issuer.clone());
+        let effective_limit =
+            if limit == 0 || limit > MAX_PAGE_LIMIT { MAX_PAGE_LIMIT } else { limit };
+
+        if start >= count {
+            return (Vec::new(&env), None);
+        }
+
+        let end = core::cmp::min(start + effective_limit, count);
+        let mut results = Vec::new(&env);
+        for i in start..end {
+            let item_key = DataKey::NamespaceItem(issuer.clone(), i);
+            let namespace: Symbol = env.storage().persistent().get(&item_key).unwrap();
+            results.push_back(namespace);
         }
 
         let next_cursor = if end < count { Some(end) } else { None };
@@ -1684,6 +1761,51 @@ impl RevoraRevenueShare {
             .unwrap_or_else(|| Vec::new(&env))
     }
 
+    /// Return a page of blacklisted addresses for an offering.
+    ///
+    /// Ordering is based on insertion order, ensuring stability across calls.
+    ///
+    /// ### Parameters
+    /// - `issuer`: The address that registered the offering.
+    /// - `namespace`: The namespace the offering belongs to.
+    /// - `token`: The token representing the offering.
+    /// - `start`: The starting index for the page.
+    /// - `limit`: Maximum number of addresses to return (capped by `MAX_PAGE_LIMIT`).
+    ///
+    /// ### Returns
+    /// - `(Vec<Address>, Option<u32>)`: A tuple containing the page of blacklisted addresses
+    ///   and an optional cursor for the next page.
+    pub fn get_blacklist_page(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+        start: u32,
+        limit: u32,
+    ) -> (Vec<Address>, Option<u32>) {
+        let offering_id = OfferingId { issuer, namespace, token };
+        let order_key = DataKey::BlacklistOrder(offering_id);
+        let order: Vec<Address> =
+            env.storage().persistent().get(&order_key).unwrap_or_else(|| Vec::new(&env));
+        let count = order.len();
+
+        let effective_limit =
+            if limit == 0 || limit > MAX_PAGE_LIMIT { MAX_PAGE_LIMIT } else { limit };
+
+        if start >= count {
+            return (Vec::new(&env), None);
+        }
+
+        let end = core::cmp::min(start + effective_limit, count);
+        let mut results = Vec::new(&env);
+        for i in start..end {
+            results.push_back(order.get(i).unwrap());
+        }
+
+        let next_cursor = if end < count { Some(end) } else { None };
+        (results, next_cursor)
+    }
+
     // ── Whitelist management ──────────────────────────────────
 
     /// Set per-offering concentration limit. Caller must be the offering issuer.
@@ -1810,6 +1932,55 @@ impl RevoraRevenueShare {
             .get::<DataKey, Map<Address, bool>>(&key)
             .map(|m| m.keys())
             .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Return a page of whitelisted addresses for an offering.
+    ///
+    /// Ordering is based on Address lexicographical order (inherent to Soroban Map keys).
+    ///
+    /// ### Parameters
+    /// - `issuer`: The address that registered the offering.
+    /// - `namespace`: The namespace the offering belongs to.
+    /// - `token`: The token representing the offering.
+    /// - `start`: The starting index for the page.
+    /// - `limit`: Maximum number of addresses to return (capped by `MAX_PAGE_LIMIT`).
+    ///
+    /// ### Returns
+    /// - `(Vec<Address>, Option<u32>)`: A tuple containing the page of whitelisted addresses
+    ///   and an optional cursor for the next page.
+    pub fn get_whitelist_page(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+        start: u32,
+        limit: u32,
+    ) -> (Vec<Address>, Option<u32>) {
+        let offering_id = OfferingId { issuer, namespace, token };
+        let key = DataKey::Whitelist(offering_id);
+        let keys = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Map<Address, bool>>(&key)
+            .map(|m| m.keys())
+            .unwrap_or_else(|| Vec::new(&env));
+        let count = keys.len();
+
+        let effective_limit =
+            if limit == 0 || limit > MAX_PAGE_LIMIT { MAX_PAGE_LIMIT } else { limit };
+
+        if start >= count {
+            return (Vec::new(&env), None);
+        }
+
+        let end = core::cmp::min(start + effective_limit, count);
+        let mut results = Vec::new(&env);
+        for i in start..end {
+            results.push_back(keys.get(i).unwrap());
+        }
+
+        let next_cursor = if end < count { Some(end) } else { None };
+        (results, next_cursor)
     }
 
     /// Returns `true` if whitelist enforcement is enabled for an offering.
@@ -2991,6 +3162,54 @@ impl RevoraRevenueShare {
         let offering_id = OfferingId { issuer, namespace, token };
         let count_key = DataKey::PeriodCount(offering_id);
         env.storage().persistent().get(&count_key).unwrap_or(0)
+    }
+
+    /// Return a page of period IDs for an offering.
+    ///
+    /// Ordering is based on deposit order, ensuring stability across calls.
+    ///
+    /// ### Parameters
+    /// - `issuer`: The address that registered the offering.
+    /// - `namespace`: The namespace the offering belongs to.
+    /// - `token`: The token representing the offering.
+    /// - `start`: The starting index for the page.
+    /// - `limit`: Maximum number of period IDs to return (capped by `MAX_PAGE_LIMIT`).
+    ///
+    /// ### Returns
+    /// - `(Vec<u64>, Option<u32>)`: A tuple containing the page of period IDs
+    ///   and an optional cursor for the next page.
+    pub fn get_periods_page(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+        start: u32,
+        limit: u32,
+    ) -> (Vec<u64>, Option<u32>) {
+        let offering_id = OfferingId {
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+        };
+        let count =
+            Self::get_period_count(env.clone(), issuer.clone(), namespace.clone(), token.clone());
+        let effective_limit =
+            if limit == 0 || limit > MAX_PAGE_LIMIT { MAX_PAGE_LIMIT } else { limit };
+
+        if start >= count {
+            return (Vec::new(&env), None);
+        }
+
+        let end = core::cmp::min(start + effective_limit, count);
+        let mut results = Vec::new(&env);
+        for i in start..end {
+            let entry_key = DataKey::PeriodEntry(offering_id.clone(), i);
+            let period_id: u64 = env.storage().persistent().get(&entry_key).unwrap_or(0);
+            results.push_back(period_id);
+        }
+
+        let next_cursor = if end < count { Some(end) } else { None };
+        (results, next_cursor)
     }
 
     /// Test helper: insert a period entry and revenue without transferring tokens.

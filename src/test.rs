@@ -8265,3 +8265,195 @@ fn test_per_offering_pause_persistence() {
     client.register_offering(&issuer, &namespace, &token2, &1000, &token2, &0);
     assert!(!client.is_offering_paused(&issuer, &namespace, &token2));
 }
+
+// ── Offering Pagination Stability tests (#24) ────────────────────────────────
+
+#[test]
+fn test_pagination_caps_at_max() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+    let namespace = symbol_short!("ns");
+
+    // Register 25 offerings (exceeds MAX_PAGE_LIMIT=20)
+    for _ in 0..25 {
+        let token = Address::generate(&env);
+        client.register_offering(&issuer, &namespace, &token, &1000, &token, &0);
+    }
+
+    // Default limit (0) should be MAX_PAGE_LIMIT
+    let (page, cursor) = client.get_offerings_page(&issuer, &namespace, &0, &0);
+    assert_eq!(page.len(), 20); // MAX_PAGE_LIMIT
+    assert_eq!(cursor, Some(20));
+
+    // Requested limit 50 should be capped to 20
+    let (page50, cursor50) = client.get_offerings_page(&issuer, &namespace, &0, &50);
+    assert_eq!(page50.len(), 20);
+    assert_eq!(cursor50, Some(20));
+}
+
+#[test]
+fn test_get_issuers_page_stability() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+
+    let mut issuers = Vec::new(&env);
+    for _ in 0..10 {
+        let issuer = Address::generate(&env);
+        issuers.push_back(issuer.clone());
+        let token = Address::generate(&env);
+        client.register_offering(&issuer, &symbol_short!("ns"), &token, &1000, &token, &0);
+    }
+
+    let (page1, cursor1) = client.get_issuers_page(&0, &4);
+    assert_eq!(page1.len(), 4);
+    assert_eq!(cursor1, Some(4));
+    for i in 0..4 {
+        assert_eq!(page1.get(i).unwrap(), issuers.get(i).unwrap());
+    }
+
+    let (page2, cursor2) = client.get_issuers_page(&4, &4);
+    assert_eq!(page2.len(), 4);
+    assert_eq!(cursor2, Some(8));
+    for i in 0..4 {
+        assert_eq!(page2.get(i).unwrap(), issuers.get(i + 4).unwrap());
+    }
+
+    let (page3, cursor3) = client.get_issuers_page(&8, &10);
+    assert_eq!(page3.len(), 2);
+    assert_eq!(cursor3, None);
+    for i in 0..2 {
+        assert_eq!(page3.get(i).unwrap(), issuers.get(i + 8).unwrap());
+    }
+}
+
+#[test]
+fn test_get_namespaces_page_stability() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+
+    let mut namespaces = Vec::new(&env);
+    namespaces.push_back(symbol_short!("ns0"));
+    namespaces.push_back(symbol_short!("ns1"));
+    namespaces.push_back(symbol_short!("ns2"));
+    namespaces.push_back(symbol_short!("ns3"));
+    namespaces.push_back(symbol_short!("ns4"));
+
+    for ns in namespaces.iter() {
+        let token = Address::generate(&env);
+        client.register_offering(&issuer, &ns, &token, &1000, &token, &0);
+    }
+
+    let (page, cursor) = client.get_namespaces_page(&issuer, &0, &3);
+    assert_eq!(page.len(), 3);
+    assert_eq!(cursor, Some(3));
+    for i in 0..3 {
+        assert_eq!(page.get(i).unwrap(), namespaces.get(i).unwrap());
+    }
+
+    let (page_end, cursor_end) = client.get_namespaces_page(&issuer, &3, &10);
+    assert_eq!(page_end.len(), 2);
+    assert_eq!(cursor_end, None);
+}
+
+#[test]
+fn test_get_blacklist_page_stability() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &None, &Some(false));
+
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let namespace = symbol_short!("ns");
+    client.register_offering(&issuer, &namespace, &token, &1000, &token, &0);
+
+    let mut investors = Vec::new(&env);
+    for _ in 0..15 {
+        let investor = Address::generate(&env);
+        investors.push_back(investor.clone());
+        client.blacklist_add(&issuer, &issuer, &namespace, &token, &investor);
+    }
+
+    let (page, cursor) = client.get_blacklist_page(&issuer, &namespace, &token, &0, &10);
+    assert_eq!(page.len(), 10);
+    assert_eq!(cursor, Some(10));
+    for i in 0..10 {
+        assert_eq!(page.get(i).unwrap(), investors.get(i).unwrap());
+    }
+
+    let (page2, cursor2) = client.get_blacklist_page(&issuer, &namespace, &token, &10, &10);
+    assert_eq!(page2.len(), 5);
+    assert_eq!(cursor2, None);
+}
+
+#[test]
+fn test_get_whitelist_page_stability_lexicographical() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &None, &Some(false));
+
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let namespace = symbol_short!("ns");
+    client.register_offering(&issuer, &namespace, &token, &1000, &token, &0);
+
+    for _ in 0..10 {
+        let investor = Address::generate(&env);
+        client.whitelist_add(&issuer, &issuer, &namespace, &token, &investor);
+    }
+
+    let (page, _) = client.get_whitelist_page(&issuer, &namespace, &token, &0, &100);
+    assert_eq!(page.len(), 10);
+
+    // Verify ordering is stable (lexicographical for Addresses as per Soroban Map keys)
+    for i in 0..9 {
+        assert!(page.get(i).unwrap() < page.get(i + 1).unwrap());
+    }
+}
+
+#[test]
+fn test_get_periods_page_stability() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let namespace = symbol_short!("ns");
+    client.register_offering(&issuer, &namespace, &token, &1000, &token, &0);
+
+    for i in 1..=12 {
+        client.test_insert_period(&issuer, &namespace, &token, &(i as u64), &1000);
+    }
+
+    let (page, cursor) = client.get_periods_page(&issuer, &namespace, &token, &0, &5);
+    assert_eq!(page.len(), 5);
+    assert_eq!(cursor, Some(5));
+    for i in 0..5 {
+        assert_eq!(page.get(i).unwrap(), (i + 1) as u64);
+    }
+
+    let (page2, cursor2) = client.get_periods_page(&issuer, &namespace, &token, &10, &10);
+    assert_eq!(page2.len(), 2);
+    assert_eq!(cursor2, None);
+    assert_eq!(page2.get(0).unwrap(), 11);
+    assert_eq!(page2.get(1).unwrap(), 12);
+}
+
+#[test]
+fn test_pagination_out_of_bounds() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RevoraRevenueShare);
+    let client = RevoraRevenueShareClient::new(&env, &contract_id);
+
+    let (page, cursor) = client.get_issuers_page(&100, &10);
+    assert_eq!(page.len(), 0);
+    assert_eq!(cursor, None);
+}
