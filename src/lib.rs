@@ -1461,6 +1461,16 @@ impl RevoraRevenueShare {
         Self::require_not_paused(&env);
         caller.require_auth();
 
+        // Verify offering exists and get current issuer for auth check
+        let current_issuer =
+            Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
+                .ok_or(RevoraError::OfferingNotFound)?;
+        let admin = Self::get_admin(env.clone()).ok_or(RevoraError::NotInitialized)?;
+
+        if caller != current_issuer && caller != admin {
+            return Err(RevoraError::NotAuthorized);
+        }
+
         let offering_id = OfferingId {
             issuer: issuer.clone(),
             namespace: namespace.clone(),
@@ -1472,34 +1482,18 @@ impl RevoraRevenueShare {
             let mut map: Map<Address, bool> =
                 env.storage().persistent().get(&key).unwrap_or_else(|| Map::new(&env));
 
-            map.set(investor.clone(), true);
-            env.storage().persistent().set(&key, &map);
-        }
-        // Verify auth: caller must be issuer or admin
-        let current_issuer =
-            Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
-                .ok_or(RevoraError::OfferingNotFound)?;
-        let admin = Self::get_admin(env.clone()).ok_or(RevoraError::NotInitialized)?;
+            let was_present = map.get(investor.clone()).unwrap_or(false);
+            if !was_present {
+                map.set(investor.clone(), true);
+                env.storage().persistent().set(&key, &map);
 
-        if caller != current_issuer && caller != admin {
-            return Err(RevoraError::NotAuthorized);
-        }
-
-        let key = DataKey::Blacklist(offering_id.clone());
-        let mut map: Map<Address, bool> =
-            env.storage().persistent().get(&key).unwrap_or_else(|| Map::new(&env));
-
-        let was_present = map.get(investor.clone()).unwrap_or(false);
-        map.set(investor.clone(), true);
-        env.storage().persistent().set(&key, &map);
-
-        // Maintain insertion order for deterministic get_blacklist (#38)
-        if !was_present {
-            let order_key = DataKey::BlacklistOrder(offering_id.clone());
-            let mut order: Vec<Address> =
-                env.storage().persistent().get(&order_key).unwrap_or_else(|| Vec::new(&env));
-            order.push_back(investor.clone());
-            env.storage().persistent().set(&order_key, &order);
+                // Maintain insertion order for deterministic get_blacklist (#38)
+                let order_key = DataKey::BlacklistOrder(offering_id.clone());
+                let mut order: Vec<Address> =
+                    env.storage().persistent().get(&order_key).unwrap_or_else(|| Vec::new(&env));
+                order.push_back(investor.clone());
+                env.storage().persistent().set(&order_key, &order);
+            }
         }
 
         env.events().publish((EVENT_BL_ADD, issuer, namespace, token), (caller, investor));
@@ -1516,10 +1510,14 @@ impl RevoraRevenueShare {
     /// - `token`: The token representing the offering.
     /// - `investor`: The address to be removed from the blacklist.
     ///
+    /// ### Security Assumptions
+    /// - `caller` must be the current issuer of the offering or the contract admin.
+    /// - `namespace` isolation ensures that removing from one blacklist does not affect others.
+    ///
     /// ### Returns
     /// - `Ok(())` on success.
-    /// - `Err(RevoraError::ContractFrozen)` if the contract is frozen.
-    pub fn blacklist_remove(
+    /// - `Err(RevoraError::OfferingNotFound)` if the offering is not registered.
+    /// - `Err(RevoraError::NotAuthorized)` if the caller is not authorized.
         env: Env,
         caller: Address,
         issuer: Address,
@@ -1531,39 +1529,41 @@ impl RevoraRevenueShare {
         Self::require_not_paused(&env);
         caller.require_auth();
 
+        // Verify offering exists and get current issuer for auth check
+        let current_issuer =
+            Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
+                .ok_or(RevoraError::OfferingNotFound)?;
+        let admin = Self::get_admin(env.clone()).ok_or(RevoraError::NotInitialized)?;
+
+        if caller != current_issuer && caller != admin {
+            return Err(RevoraError::NotAuthorized);
+        }
+
         let offering_id = OfferingId {
             issuer: issuer.clone(),
             namespace: namespace.clone(),
             token: token.clone(),
         };
 
-        let current_issuer =
-            Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
-                .ok_or(RevoraError::OfferingNotFound)?;
-        let admin = Self::get_admin(env.clone()).ok_or(RevoraError::NotInitialized)?;
-        if caller != current_issuer && caller != admin {
-            return Err(RevoraError::NotAuthorized);
-        }
-
         if !Self::is_event_only(&env) {
             let key = DataKey::Blacklist(offering_id.clone());
-            let mut map: Map<Address, bool> =
-                env.storage().persistent().get(&key).unwrap_or_else(|| Map::new(&env));
-            map.remove(investor.clone());
-            env.storage().persistent().set(&key, &map);
+            if let Some(mut map) = env.storage().persistent().get::<DataKey, Map<Address, bool>>(&key)
+            {
+                if map.remove(investor.clone()).is_some() {
+                    env.storage().persistent().set(&key, &map);
 
-            // Rebuild order vec so get_blacklist stays deterministic (#38)
-            let order_key = DataKey::BlacklistOrder(offering_id.clone());
-            let old_order: Vec<Address> =
-                env.storage().persistent().get(&order_key).unwrap_or_else(|| Vec::new(&env));
-            let mut new_order = Vec::new(&env);
-            for i in 0..old_order.len() {
-                let addr = old_order.get(i).unwrap();
-                if map.get(addr.clone()).unwrap_or(false) {
-                    new_order.push_back(addr);
+                    // Update order vector for deterministic get_blacklist (#38)
+                    let order_key = DataKey::BlacklistOrder(offering_id.clone());
+                    if let Some(mut order) =
+                        env.storage().persistent().get::<DataKey, Vec<Address>>(&order_key)
+                    {
+                        if let Some(idx) = order.first_index_of(investor.clone()) {
+                            order.remove(idx);
+                            env.storage().persistent().set(&order_key, &order);
+                        }
+                    }
                 }
             }
-            env.storage().persistent().set(&order_key, &new_order);
         }
 
         env.events().publish((EVENT_BL_REM, issuer, namespace, token), (caller, investor));
@@ -1612,7 +1612,14 @@ impl RevoraRevenueShare {
     /// Idempotent — calling with an already-whitelisted address is safe.
     /// When a whitelist exists (non-empty), only whitelisted addresses
     /// are eligible for revenue distribution (subject to blacklist override).
-    /// Add `investor` to the per-offering whitelist.
+    /// ### Security Assumptions
+    /// - `caller` must be the current issuer of the offering.
+    /// - `namespace` partitioning prevents whitelists from leaking across tenants.
+    ///
+    /// ### Returns
+    /// - `Ok(())` on success.
+    /// - `Err(RevoraError::OfferingNotFound)` if the offering is not registered.
+    /// - `Err(RevoraError::NotAuthorized)` if the caller is not authorized.
     pub fn whitelist_add(
         env: Env,
         caller: Address,
@@ -1620,32 +1627,37 @@ impl RevoraRevenueShare {
         namespace: Symbol,
         token: Address,
         investor: Address,
-    ) {
+    ) -> Result<(), RevoraError> {
+        Self::require_not_frozen(&env)?;
+        Self::require_not_paused(&env);
         caller.require_auth();
+
+        // Verify offering exists and get current issuer for auth check
         let current_issuer =
             Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
-                .expect("offering not found");
+                .ok_or(RevoraError::OfferingNotFound)?;
+
         if caller != current_issuer {
-            panic!("not authorized");
+            return Err(RevoraError::NotAuthorized);
         }
 
-        let offering_id = OfferingId { issuer, namespace, token };
-        let key = DataKey::Whitelist(offering_id.clone());
-        let mut map: Map<Address, bool> =
-            env.storage().persistent().get(&key).unwrap_or_else(|| Map::new(&env));
+        let offering_id = OfferingId {
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+        };
 
-        map.set(investor.clone(), true);
-        env.storage().persistent().set(&key, &map);
+        if !Self::is_event_only(&env) {
+            let key = DataKey::Whitelist(offering_id.clone());
+            let mut map: Map<Address, bool> =
+                env.storage().persistent().get(&key).unwrap_or_else(|| Map::new(&env));
 
-        env.events().publish(
-            (
-                EVENT_WL_ADD,
-                offering_id.issuer.clone(),
-                offering_id.namespace.clone(),
-                offering_id.token.clone(),
-            ),
-            (caller, investor),
-        );
+            map.set(investor.clone(), true);
+            env.storage().persistent().set(&key, &map);
+        }
+
+        env.events().publish((EVENT_WL_ADD, issuer, namespace, token), (caller, investor));
+        Ok(())
     }
 
     /// Remove `investor` from the per-offering whitelist for `token`.
@@ -1659,32 +1671,38 @@ impl RevoraRevenueShare {
         namespace: Symbol,
         token: Address,
         investor: Address,
-    ) {
+    ) -> Result<(), RevoraError> {
+        Self::require_not_frozen(&env)?;
+        Self::require_not_paused(&env);
         caller.require_auth();
+
+        // Verify offering exists and get current issuer for auth check
         let current_issuer =
             Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
-                .expect("offering not found");
+                .ok_or(RevoraError::OfferingNotFound)?;
+
         if caller != current_issuer {
-            panic!("not authorized");
+            return Err(RevoraError::NotAuthorized);
         }
 
-        let offering_id = OfferingId { issuer, namespace, token };
-        let key = DataKey::Whitelist(offering_id.clone());
-        let mut map: Map<Address, bool> =
-            env.storage().persistent().get(&key).unwrap_or_else(|| Map::new(&env));
+        let offering_id = OfferingId {
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+        };
 
-        map.remove(investor.clone());
-        env.storage().persistent().set(&key, &map);
+        if !Self::is_event_only(&env) {
+            let key = DataKey::Whitelist(offering_id.clone());
+            if let Some(mut map) = env.storage().persistent().get::<DataKey, Map<Address, bool>>(&key)
+            {
+                if map.remove(investor.clone()).is_some() {
+                    env.storage().persistent().set(&key, &map);
+                }
+            }
+        }
 
-        env.events().publish(
-            (
-                EVENT_WL_REM,
-                offering_id.issuer.clone(),
-                offering_id.namespace.clone(),
-                offering_id.token.clone(),
-            ),
-            (caller, investor),
-        );
+        env.events().publish((EVENT_WL_REM, issuer, namespace, token), (caller, investor));
+        Ok(())
     }
 
     /// Returns `true` if `investor` is whitelisted for `token`'s offering.
@@ -1807,36 +1825,39 @@ impl RevoraRevenueShare {
         concentration_bps: u32,
     ) -> Result<(), RevoraError> {
         Self::require_not_frozen(&env)?;
+        Self::require_not_paused(&env);
         issuer.require_auth();
+
+        // Verify offering exists and get current issuer for auth check
+        let current_issuer =
+            Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
+                .ok_or(RevoraError::OfferingNotFound)?;
+
+        if current_issuer != issuer {
+            return Err(RevoraError::NotAuthorized);
+        }
+
         let offering_id = OfferingId {
             issuer: issuer.clone(),
             namespace: namespace.clone(),
             token: token.clone(),
         };
 
-        // Verify offering exists and issuer is current
-        let current_issuer =
-            Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
-                .ok_or(RevoraError::OfferingNotFound)?;
-
-        if current_issuer != issuer {
-            return Err(RevoraError::OfferingNotFound);
-        }
-
         if !Self::is_event_only(&env) {
-            let curr_key = DataKey::CurrentConcentration(offering_id.clone());
-            env.storage().persistent().set(&curr_key, &concentration_bps);
-        }
+            let key = DataKey::CurrentConcentration(offering_id.clone());
+            env.storage().persistent().set(&key, &concentration_bps);
 
-        let limit_key = DataKey::ConcentrationLimit(offering_id);
-        if let Some(config) =
-            env.storage().persistent().get::<DataKey, ConcentrationLimitConfig>(&limit_key)
-        {
-            if config.max_bps > 0 && concentration_bps > config.max_bps {
-                env.events().publish(
-                    (EVENT_CONCENTRATION_WARNING, issuer, namespace, token),
-                    (concentration_bps, config.max_bps),
-                );
+            // Check against limit and emit warning if exceeded
+            let limit_key = DataKey::ConcentrationLimit(offering_id);
+            if let Some(limit) =
+                env.storage().persistent().get::<DataKey, ConcentrationLimitConfig>(&limit_key)
+            {
+                if limit.max_bps > 0 && concentration_bps > limit.max_bps {
+                    env.events().publish(
+                        (EVENT_CONCENTRATION_WARNING, issuer, namespace, token),
+                        (concentration_bps, limit.max_bps),
+                    );
+                }
             }
         }
         Ok(())
