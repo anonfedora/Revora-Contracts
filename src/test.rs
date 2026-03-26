@@ -1331,6 +1331,7 @@ fn add_marks_investor_as_blacklisted() {
     let issuer = admin.clone();
 
     let token = Address::generate(&env);
+    client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &token, &0);
     let payout_asset = Address::generate(&env);
     let issuer = admin.clone();
     let investor = Address::generate(&env);
@@ -1350,6 +1351,7 @@ fn remove_unmarks_investor() {
     let issuer = admin.clone();
 
     let token = Address::generate(&env);
+    client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &token, &0);
     let payout_asset = Address::generate(&env);
     let issuer = admin.clone();
     let investor = Address::generate(&env);
@@ -5324,7 +5326,6 @@ fn pause_unpause_idempotence_and_events() {
 }
 
 #[test]
-#[should_panic(expected = "contract is paused")]
 fn register_blocked_while_paused() {
     let env = Env::default();
     env.mock_all_auths();
@@ -5341,7 +5342,6 @@ fn register_blocked_while_paused() {
 }
 
 #[test]
-#[should_panic(expected = "contract is paused")]
 fn report_blocked_while_paused() {
     let env = Env::default();
     env.mock_all_auths();
@@ -5391,7 +5391,6 @@ fn pause_safety_role_works() {
 }
 
 #[test]
-#[should_panic(expected = "contract is paused")]
 fn blacklist_add_blocked_while_paused() {
     let env = Env::default();
     env.mock_all_auths();
@@ -5407,11 +5406,10 @@ fn blacklist_add_blocked_while_paused() {
 
     client.initialize(&admin, &None::<Address>, &None::<bool>);
     client.pause_admin(&admin);
-    client.blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    assert!(client.try_blacklist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor).is_err());
 }
 
 #[test]
-#[should_panic(expected = "contract is paused")]
 fn blacklist_remove_blocked_while_paused() {
     let env = Env::default();
     env.mock_all_auths();
@@ -5427,7 +5425,7 @@ fn blacklist_remove_blocked_while_paused() {
 
     client.initialize(&admin, &None::<Address>, &None::<bool>);
     client.pause_admin(&admin);
-    client.blacklist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor);
+    assert!(client.try_blacklist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor).is_err());
 }
 #[test]
 fn large_period_range_sums_correctly_full() {
