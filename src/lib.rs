@@ -179,6 +179,8 @@ const EVENT_META_SIGNER_SET: Symbol = symbol_short!("meta_key");
 const EVENT_META_DELEGATE_SET: Symbol = symbol_short!("meta_del");
 const EVENT_META_SHARE_SET: Symbol = symbol_short!("meta_shr");
 const EVENT_META_REV_APPROVE: Symbol = symbol_short!("meta_rev");
+/// Emitted when `repair_audit_summary` writes a corrected `AuditSummary` to storage.
+const EVENT_AUDIT_REPAIRED: Symbol = symbol_short!("aud_rep");
 
 const BPS_DENOMINATOR: i128 = 10_000;
 
@@ -247,6 +249,30 @@ pub struct AuditSummary {
     pub total_revenue: i128,
     /// Total number of revenue reports submitted.
     pub report_count: u64,
+}
+
+/// Result of `reconcile_audit_summary`: compares the stored `AuditSummary` cache
+/// against the authoritative `RevenueReports` map.
+///
+/// Use `is_consistent` to determine whether the cache is accurate.
+/// If not, call `repair_audit_summary` to correct it.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AuditReconciliationResult {
+    /// `total_revenue` currently stored in `AuditSummary`.
+    pub stored_total_revenue: i128,
+    /// `report_count` currently stored in `AuditSummary`.
+    pub stored_report_count: u64,
+    /// Sum of all per-period amounts in the authoritative `RevenueReports` map.
+    pub computed_total_revenue: i128,
+    /// Number of entries in the authoritative `RevenueReports` map.
+    pub computed_report_count: u64,
+    /// True iff `stored_total_revenue == computed_total_revenue`
+    /// AND `stored_report_count == computed_report_count`.
+    pub is_consistent: bool,
+    /// True iff `computed_total_revenue` saturated at `i128::MAX` during summation.
+    /// When saturated, `is_consistent` is always false.
+    pub is_saturated: bool,
 }
 
 /// Cross-offering aggregated metrics (#39).
@@ -1114,9 +1140,20 @@ impl RevoraRevenueShare {
             let mut cumulative_revenue: i128 =
                 env.storage().persistent().get(&idx_key).unwrap_or(0);
 
+            // Track the net audit delta for this call:
+            //   (revenue_delta, count_delta)
+            // Initial report  → (+amount, +1)
+            // Override        → (new - old, 0)   — period already counted
+            // Rejected        → (0, 0)            — no mutation
+            let mut audit_revenue_delta: i128 = 0;
+            let mut audit_count_delta: u64 = 0;
+
             match reports.get(period_id) {
                 Some((existing_amount, _timestamp)) => {
                     if override_existing {
+                        // Net delta = new amount minus the old amount.
+                        audit_revenue_delta = amount.saturating_sub(existing_amount);
+                        // count_delta stays 0: the period was already counted.
                         reports.set(period_id, (amount, current_timestamp));
                         env.storage().persistent().set(&key, &reports);
 
@@ -1202,7 +1239,10 @@ impl RevoraRevenueShare {
                     }
                 }
                 None => {
-                    // Initial report for this period
+                    // Initial report for this period.
+                    audit_revenue_delta = amount;
+                    audit_count_delta = 1;
+
                     cumulative_revenue = cumulative_revenue.checked_add(amount).unwrap_or(amount);
                     env.storage().persistent().set(&idx_key, &cumulative_revenue);
 
@@ -1244,6 +1284,19 @@ impl RevoraRevenueShare {
                     );
                 }
             }
+
+            // Apply the net audit delta computed above (exactly once, after the match).
+            if audit_revenue_delta != 0 || audit_count_delta != 0 {
+                let summary_key = DataKey::AuditSummary(offering_id.clone());
+                let mut summary: AuditSummary = env
+                    .storage()
+                    .persistent()
+                    .get(&summary_key)
+                    .unwrap_or(AuditSummary { total_revenue: 0, report_count: 0 });
+                summary.total_revenue = summary.total_revenue.saturating_add(audit_revenue_delta);
+                summary.report_count = summary.report_count.saturating_add(audit_count_delta);
+                env.storage().persistent().set(&summary_key, &summary);
+            }
         } else {
             // Event-only mode: always treat as initial report (or simply publish the event)
             env.events().publish(
@@ -1275,16 +1328,6 @@ impl RevoraRevenueShare {
             (payout_asset.clone(), amount, period_id),
         );
 
-        // Audit log summary (#34): maintain per-offering total revenue and report count
-        let summary_key = DataKey::AuditSummary(offering_id.clone());
-        let mut summary: AuditSummary = env
-            .storage()
-            .persistent()
-            .get(&summary_key)
-            .unwrap_or(AuditSummary { total_revenue: 0, report_count: 0 });
-        summary.total_revenue = summary.total_revenue.saturating_add(amount);
-        summary.report_count = summary.report_count.saturating_add(1);
-        env.storage().persistent().set(&summary_key, &summary);
         // Optionally emit versioned v1 events for forward-compatible consumers
         if Self::is_event_versioning_enabled(env.clone()) {
             env.events().publish(
@@ -1308,20 +1351,160 @@ impl RevoraRevenueShare {
             );
         }
 
-        if !event_only {
-            // Audit log summary (#34): maintain per-offering total revenue and report count
-            let summary_key = DataKey::AuditSummary(offering_id);
-            let mut summary: AuditSummary = env
-                .storage()
-                .persistent()
-                .get(&summary_key)
-                .unwrap_or(AuditSummary { total_revenue: 0, report_count: 0 });
-            summary.total_revenue = summary.total_revenue.saturating_add(amount);
-            summary.report_count = summary.report_count.saturating_add(1);
-            env.storage().persistent().set(&summary_key, &summary);
+        Ok(())
+    }
+
+    /// Reconcile the stored `AuditSummary` for an offering against the ground-truth
+    /// `RevenueReports` map and return a structured result.
+    ///
+    /// This is a **read-only** operation — it never mutates state. Callers can use
+    /// the returned `AuditReconciliationResult` to detect drift and decide whether
+    /// to call `repair_audit_summary` to correct it.
+    ///
+    /// ### Security assumptions
+    /// - Any caller may invoke this (no auth required); it is purely diagnostic.
+    /// - The `RevenueReports` map is the authoritative source of truth for per-period
+    ///   amounts. The `AuditSummary` is a derived cache; if they diverge, the map wins.
+    /// - Overflow in `total_revenue` is handled with `saturating_add`; a saturated
+    ///   value is flagged via `is_saturated`.
+    ///
+    /// ### Returns
+    /// `AuditReconciliationResult` with:
+    /// - `stored_total_revenue`  — value currently in `AuditSummary`.
+    /// - `stored_report_count`   — value currently in `AuditSummary`.
+    /// - `computed_total_revenue`— sum of all per-period amounts in `RevenueReports`.
+    /// - `computed_report_count` — number of entries in `RevenueReports`.
+    /// - `is_consistent`         — true iff both totals and counts match.
+    /// - `is_saturated`          — true iff `computed_total_revenue` saturated during summation.
+    pub fn reconcile_audit_summary(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+    ) -> AuditReconciliationResult {
+        let offering_id = OfferingId {
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+        };
+
+        // Read stored summary (default to zeroes if never written).
+        let summary_key = DataKey::AuditSummary(offering_id.clone());
+        let stored: AuditSummary = env
+            .storage()
+            .persistent()
+            .get(&summary_key)
+            .unwrap_or(AuditSummary { total_revenue: 0, report_count: 0 });
+
+        // Recompute from the authoritative RevenueReports map.
+        let reports_key = DataKey::RevenueReports(offering_id);
+        let reports: Map<u64, (i128, u64)> =
+            env.storage().persistent().get(&reports_key).unwrap_or_else(|| Map::new(&env));
+
+        let computed_report_count = reports.len() as u64;
+        let mut computed_total: i128 = 0;
+        let mut saturated = false;
+
+        let keys = reports.keys();
+        for i in 0..keys.len() {
+            let period_id = keys.get(i).unwrap();
+            if let Some((amount, _)) = reports.get(period_id) {
+                let (next, overflow) = computed_total.overflowing_add(amount);
+                if overflow {
+                    saturated = true;
+                    computed_total = i128::MAX;
+                    break;
+                }
+                computed_total = next;
+            }
         }
 
-        Ok(())
+        let is_consistent = !saturated
+            && stored.total_revenue == computed_total
+            && stored.report_count == computed_report_count;
+
+        AuditReconciliationResult {
+            stored_total_revenue: stored.total_revenue,
+            stored_report_count: stored.report_count,
+            computed_total_revenue: computed_total,
+            computed_report_count,
+            is_consistent,
+            is_saturated: saturated,
+        }
+    }
+
+    /// Repair the `AuditSummary` for an offering by recomputing it from the
+    /// authoritative `RevenueReports` map and writing the corrected value.
+    ///
+    /// ### Auth
+    /// Only the current issuer or the contract admin may call this. This prevents
+    /// arbitrary callers from triggering unnecessary storage writes.
+    ///
+    /// ### Security notes
+    /// - This function is idempotent: calling it when the summary is already correct
+    ///   is safe and produces no observable side-effects beyond the storage write.
+    /// - If `RevenueReports` is empty (no reports ever filed), the summary is reset
+    ///   to `{total_revenue: 0, report_count: 0}`.
+    /// - Overflow during recomputation is handled with saturation; the resulting
+    ///   summary will have `total_revenue == i128::MAX` in that case.
+    ///
+    /// ### Returns
+    /// The corrected `AuditSummary` that was written to storage.
+    pub fn repair_audit_summary(
+        env: Env,
+        caller: Address,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+    ) -> Result<AuditSummary, RevoraError> {
+        Self::require_not_frozen(&env)?;
+        caller.require_auth();
+
+        // Auth: caller must be current issuer or admin.
+        let current_issuer =
+            Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
+                .ok_or(RevoraError::OfferingNotFound)?;
+        let admin = Self::get_admin(env.clone()).ok_or(RevoraError::NotInitialized)?;
+        if caller != current_issuer && caller != admin {
+            return Err(RevoraError::NotAuthorized);
+        }
+
+        let offering_id = OfferingId {
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+        };
+
+        // Recompute from the authoritative RevenueReports map.
+        let reports_key = DataKey::RevenueReports(offering_id.clone());
+        let reports: Map<u64, (i128, u64)> =
+            env.storage().persistent().get(&reports_key).unwrap_or_else(|| Map::new(&env));
+
+        let computed_report_count = reports.len() as u64;
+        let mut computed_total: i128 = 0;
+
+        let keys = reports.keys();
+        for i in 0..keys.len() {
+            let period_id = keys.get(i).unwrap();
+            if let Some((amount, _)) = reports.get(period_id) {
+                computed_total = computed_total.saturating_add(amount);
+            }
+        }
+
+        let corrected = AuditSummary {
+            total_revenue: computed_total,
+            report_count: computed_report_count,
+        };
+
+        let summary_key = DataKey::AuditSummary(offering_id);
+        env.storage().persistent().set(&summary_key, &corrected);
+
+        env.events().publish(
+            (EVENT_AUDIT_REPAIRED, issuer, namespace, token),
+            (corrected.total_revenue, corrected.report_count),
+        );
+
+        Ok(corrected)
     }
 
     pub fn get_revenue_by_period(

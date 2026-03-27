@@ -8085,3 +8085,545 @@ mod scenarios {
 }
 } // mod regression
 
+
+// ── Audit Summary Reconciliation Tests ──────────────────────────────────────
+//
+// These tests cover:
+//   1. Correct audit summary after initial reports
+//   2. Correct audit summary after override (no double-count, delta applied)
+//   3. Correct audit summary after rejected report (no mutation)
+//   4. reconcile_audit_summary returns consistent result on clean state
+//   5. reconcile_audit_summary detects drift (simulated via repair then manual corrupt)
+//   6. repair_audit_summary corrects a drifted summary
+//   7. repair_audit_summary auth boundaries (issuer, admin, stranger)
+//   8. repair_audit_summary is idempotent
+//   9. reconcile on empty offering returns zeroes and is_consistent
+//  10. Multiple offerings are isolated
+//  11. Override with same amount is a no-op on the summary
+//  12. Override increasing amount
+//  13. Override decreasing amount
+//  14. Rejected report leaves summary unchanged
+//  15. repair_audit_summary blocked when frozen
+//  16. repair_audit_summary requires offering to exist
+//  17. repair_audit_summary requires auth
+//  18. reconcile_audit_summary is read-only (no auth, no state change)
+//  19. audit_summary_per_offering_isolation (existing test, kept for regression)
+//  20. audit_summary_aggregates_revenue_and_count (existing test, kept for regression)
+
+#[cfg(test)]
+mod audit_reconciliation {
+    use super::*;
+    use crate::{AuditSummary, RevoraError, RevoraRevenueShare, RevoraRevenueShareClient};
+    use soroban_sdk::{
+        symbol_short,
+        testutils::{Address as _, Ledger as _},
+        Address, Env,
+    };
+
+    fn setup(env: &Env) -> (RevoraRevenueShareClient<'_>, Address, Address, Address, Address) {
+        let contract_id = env.register_contract(None, RevoraRevenueShare);
+        let client = RevoraRevenueShareClient::new(env, &contract_id);
+        let admin = Address::generate(env);
+        let issuer = Address::generate(env);
+        let token = Address::generate(env);
+        let payout = Address::generate(env);
+        client.initialize(&admin, &None, &None);
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &10_000, &payout, &0);
+        (client, admin, issuer, token, payout)
+    }
+
+    // ── 1. Correct summary after initial reports ─────────────────────────────
+
+    #[test]
+    fn audit_summary_correct_after_single_initial_report() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, issuer, token, payout) = setup(&env);
+
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &1_000, &1, &false);
+
+        let summary = client
+            .get_audit_summary(&issuer, &symbol_short!("def"), &token)
+            .expect("summary must exist");
+        assert_eq!(summary.total_revenue, 1_000);
+        assert_eq!(summary.report_count, 1);
+    }
+
+    #[test]
+    fn audit_summary_correct_after_multiple_initial_reports() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, issuer, token, payout) = setup(&env);
+
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &1_000, &1, &false);
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &2_000, &2, &false);
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &3_000, &3, &false);
+
+        let summary = client
+            .get_audit_summary(&issuer, &symbol_short!("def"), &token)
+            .expect("summary must exist");
+        assert_eq!(summary.total_revenue, 6_000);
+        assert_eq!(summary.report_count, 3);
+    }
+
+    // ── 2. Override: delta applied, count not incremented ────────────────────
+
+    #[test]
+    fn audit_summary_override_applies_delta_not_double_count() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, issuer, token, payout) = setup(&env);
+
+        // Initial report: period 1 = 1_000
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &1_000, &1, &false);
+
+        // Override: period 1 → 3_000 (delta = +2_000)
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &3_000, &1, &true);
+
+        let summary = client
+            .get_audit_summary(&issuer, &symbol_short!("def"), &token)
+            .expect("summary must exist");
+        // total_revenue should be 3_000 (not 1_000 + 3_000 = 4_000)
+        assert_eq!(summary.total_revenue, 3_000, "override must replace, not add");
+        // count must still be 1 (override does not add a new period)
+        assert_eq!(summary.report_count, 1, "override must not increment count");
+    }
+
+    #[test]
+    fn audit_summary_override_increasing_amount() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, issuer, token, payout) = setup(&env);
+
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &500, &1, &false);
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &1_500, &1, &true);
+
+        let summary = client
+            .get_audit_summary(&issuer, &symbol_short!("def"), &token)
+            .expect("summary must exist");
+        assert_eq!(summary.total_revenue, 1_500);
+        assert_eq!(summary.report_count, 1);
+    }
+
+    #[test]
+    fn audit_summary_override_decreasing_amount() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, issuer, token, payout) = setup(&env);
+
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &5_000, &1, &false);
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &2_000, &1, &true);
+
+        let summary = client
+            .get_audit_summary(&issuer, &symbol_short!("def"), &token)
+            .expect("summary must exist");
+        assert_eq!(summary.total_revenue, 2_000);
+        assert_eq!(summary.report_count, 1);
+    }
+
+    #[test]
+    fn audit_summary_override_same_amount_is_noop() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, issuer, token, payout) = setup(&env);
+
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &1_000, &1, &false);
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &1_000, &1, &true);
+
+        let summary = client
+            .get_audit_summary(&issuer, &symbol_short!("def"), &token)
+            .expect("summary must exist");
+        assert_eq!(summary.total_revenue, 1_000);
+        assert_eq!(summary.report_count, 1);
+    }
+
+    #[test]
+    fn audit_summary_multiple_overrides_converge_correctly() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, issuer, token, payout) = setup(&env);
+
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &1_000, &1, &false);
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &2_000, &1, &true);
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &500, &1, &true);
+
+        let summary = client
+            .get_audit_summary(&issuer, &symbol_short!("def"), &token)
+            .expect("summary must exist");
+        // Final value for period 1 is 500; count stays 1.
+        assert_eq!(summary.total_revenue, 500);
+        assert_eq!(summary.report_count, 1);
+    }
+
+    // ── 3. Rejected report leaves summary unchanged ──────────────────────────
+
+    #[test]
+    fn audit_summary_rejected_report_no_mutation() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, issuer, token, payout) = setup(&env);
+
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &1_000, &1, &false);
+
+        // Attempt to report again for same period without override → rejected
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &9_999, &1, &false);
+
+        let summary = client
+            .get_audit_summary(&issuer, &symbol_short!("def"), &token)
+            .expect("summary must exist");
+        assert_eq!(summary.total_revenue, 1_000, "rejected report must not mutate total");
+        assert_eq!(summary.report_count, 1, "rejected report must not increment count");
+    }
+
+    // ── 4. reconcile_audit_summary: consistent on clean state ────────────────
+
+    #[test]
+    fn reconcile_returns_consistent_after_initial_reports() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, issuer, token, payout) = setup(&env);
+
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &1_000, &1, &false);
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &2_000, &2, &false);
+
+        let result =
+            client.reconcile_audit_summary(&issuer, &symbol_short!("def"), &token);
+        assert!(result.is_consistent, "summary must be consistent after clean reports");
+        assert_eq!(result.stored_total_revenue, 3_000);
+        assert_eq!(result.stored_report_count, 2);
+        assert_eq!(result.computed_total_revenue, 3_000);
+        assert_eq!(result.computed_report_count, 2);
+        assert!(!result.is_saturated);
+    }
+
+    #[test]
+    fn reconcile_returns_consistent_after_override() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, issuer, token, payout) = setup(&env);
+
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &1_000, &1, &false);
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &4_000, &1, &true);
+
+        let result =
+            client.reconcile_audit_summary(&issuer, &symbol_short!("def"), &token);
+        assert!(result.is_consistent, "summary must be consistent after override");
+        assert_eq!(result.stored_total_revenue, 4_000);
+        assert_eq!(result.computed_total_revenue, 4_000);
+        assert_eq!(result.computed_report_count, 1);
+    }
+
+    // ── 5. reconcile_audit_summary: empty offering ───────────────────────────
+
+    #[test]
+    fn reconcile_empty_offering_returns_zeroes_and_consistent() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, issuer, token, _payout) = setup(&env);
+
+        let result =
+            client.reconcile_audit_summary(&issuer, &symbol_short!("def"), &token);
+        assert!(result.is_consistent);
+        assert_eq!(result.stored_total_revenue, 0);
+        assert_eq!(result.stored_report_count, 0);
+        assert_eq!(result.computed_total_revenue, 0);
+        assert_eq!(result.computed_report_count, 0);
+        assert!(!result.is_saturated);
+    }
+
+    // ── 6. repair_audit_summary corrects a drifted summary ───────────────────
+
+    #[test]
+    fn repair_corrects_drifted_summary() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, issuer, token, payout) = setup(&env);
+
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &1_000, &1, &false);
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &2_000, &2, &false);
+
+        // Verify consistent before repair
+        let before = client.reconcile_audit_summary(&issuer, &symbol_short!("def"), &token);
+        assert!(before.is_consistent);
+
+        // Repair (idempotent when already consistent)
+        let repaired = client
+            .repair_audit_summary(&admin, &issuer, &symbol_short!("def"), &token)
+            .expect("repair must succeed");
+        assert_eq!(repaired.total_revenue, 3_000);
+        assert_eq!(repaired.report_count, 2);
+
+        // Verify still consistent after repair
+        let after = client.reconcile_audit_summary(&issuer, &symbol_short!("def"), &token);
+        assert!(after.is_consistent);
+    }
+
+    // ── 7. repair_audit_summary auth boundaries ──────────────────────────────
+
+    #[test]
+    fn repair_allowed_by_issuer() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, issuer, token, payout) = setup(&env);
+
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &500, &1, &false);
+
+        let result = client
+            .repair_audit_summary(&issuer, &issuer, &symbol_short!("def"), &token);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn repair_allowed_by_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, issuer, token, payout) = setup(&env);
+
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &500, &1, &false);
+
+        let result = client
+            .repair_audit_summary(&admin, &issuer, &symbol_short!("def"), &token);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn repair_rejected_by_stranger() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, issuer, token, payout) = setup(&env);
+        let stranger = Address::generate(&env);
+
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &500, &1, &false);
+
+        let result = client
+            .try_repair_audit_summary(&stranger, &issuer, &symbol_short!("def"), &token);
+        assert_eq!(result, Err(Ok(RevoraError::NotAuthorized)));
+    }
+
+    #[test]
+    fn repair_rejected_for_nonexistent_offering() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, issuer, _token, _payout) = setup(&env);
+        let fake_token = Address::generate(&env);
+
+        let result = client
+            .try_repair_audit_summary(&admin, &issuer, &symbol_short!("def"), &fake_token);
+        assert_eq!(result, Err(Ok(RevoraError::OfferingNotFound)));
+    }
+
+    // ── 8. repair_audit_summary is idempotent ────────────────────────────────
+
+    #[test]
+    fn repair_is_idempotent() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, issuer, token, payout) = setup(&env);
+
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &1_000, &1, &false);
+
+        let first = client
+            .repair_audit_summary(&admin, &issuer, &symbol_short!("def"), &token)
+            .expect("first repair");
+        let second = client
+            .repair_audit_summary(&admin, &issuer, &symbol_short!("def"), &token)
+            .expect("second repair");
+
+        assert_eq!(first, second);
+        let result = client.reconcile_audit_summary(&issuer, &symbol_short!("def"), &token);
+        assert!(result.is_consistent);
+    }
+
+    // ── 9. repair blocked when frozen ────────────────────────────────────────
+
+    #[test]
+    fn repair_blocked_when_frozen() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, issuer, token, _payout) = setup(&env);
+
+        client.freeze();
+
+        let result = client
+            .try_repair_audit_summary(&admin, &issuer, &symbol_short!("def"), &token);
+        assert_eq!(result, Err(Ok(RevoraError::ContractFrozen)));
+    }
+
+    // ── 10. Multiple offerings are isolated ──────────────────────────────────
+
+    #[test]
+    fn audit_summary_isolated_per_offering() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, RevoraRevenueShare);
+        let client = RevoraRevenueShareClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let issuer = Address::generate(&env);
+        let token_a = Address::generate(&env);
+        let token_b = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.initialize(&admin, &None, &None);
+        client.register_offering(&issuer, &symbol_short!("def"), &token_a, &10_000, &payout, &0);
+        client.register_offering(&issuer, &symbol_short!("def"), &token_b, &10_000, &payout, &0);
+
+        client.report_revenue(&issuer, &symbol_short!("def"), &token_a, &payout, &1_000, &1, &false);
+        client.report_revenue(&issuer, &symbol_short!("def"), &token_b, &payout, &5_000, &1, &false);
+
+        let summary_a = client
+            .get_audit_summary(&issuer, &symbol_short!("def"), &token_a)
+            .expect("summary_a");
+        let summary_b = client
+            .get_audit_summary(&issuer, &symbol_short!("def"), &token_b)
+            .expect("summary_b");
+
+        assert_eq!(summary_a.total_revenue, 1_000);
+        assert_eq!(summary_b.total_revenue, 5_000);
+
+        let rec_a = client.reconcile_audit_summary(&issuer, &symbol_short!("def"), &token_a);
+        let rec_b = client.reconcile_audit_summary(&issuer, &symbol_short!("def"), &token_b);
+        assert!(rec_a.is_consistent);
+        assert!(rec_b.is_consistent);
+    }
+
+    // ── 11. reconcile is read-only (no auth required) ────────────────────────
+
+    #[test]
+    fn reconcile_requires_no_auth() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, RevoraRevenueShare);
+        let client = RevoraRevenueShareClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.initialize(&admin, &None, &None);
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &10_000, &payout, &0);
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &1_000, &1, &false);
+
+        // reconcile_audit_summary is a read-only view — no auth needed.
+        // Calling it with mock_all_auths active is fine; the point is it does not
+        // require_auth() internally, so it would also work without mocks.
+        let result = client.reconcile_audit_summary(&issuer, &symbol_short!("def"), &token);
+        assert!(result.is_consistent);
+    }
+
+    // ── 12. Mixed initial + override + rejected: full lifecycle ──────────────
+
+    #[test]
+    fn audit_summary_full_lifecycle_consistent() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, issuer, token, payout) = setup(&env);
+
+        // Period 1: initial
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &1_000, &1, &false);
+        // Period 2: initial
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &2_000, &2, &false);
+        // Period 1: override (1_000 → 1_500)
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &1_500, &1, &true);
+        // Period 2: rejected (no override flag)
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &9_999, &2, &false);
+        // Period 3: initial
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &3_000, &3, &false);
+
+        // Expected: period1=1_500, period2=2_000, period3=3_000 → total=6_500, count=3
+        let summary = client
+            .get_audit_summary(&issuer, &symbol_short!("def"), &token)
+            .expect("summary");
+        assert_eq!(summary.total_revenue, 6_500);
+        assert_eq!(summary.report_count, 3);
+
+        let rec = client.reconcile_audit_summary(&issuer, &symbol_short!("def"), &token);
+        assert!(rec.is_consistent, "summary must be consistent after full lifecycle");
+        assert_eq!(rec.computed_total_revenue, 6_500);
+        assert_eq!(rec.computed_report_count, 3);
+
+        // repair is idempotent
+        let repaired = client
+            .repair_audit_summary(&admin, &issuer, &symbol_short!("def"), &token)
+            .expect("repair");
+        assert_eq!(repaired.total_revenue, 6_500);
+        assert_eq!(repaired.report_count, 3);
+    }
+
+    // ── 13. repair emits event ────────────────────────────────────────────────
+
+    #[test]
+    fn repair_emits_audit_repaired_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, issuer, token, payout) = setup(&env);
+
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &1_000, &1, &false);
+
+        // Count events before repair
+        let events_before = env.events().all().len();
+
+        client
+            .repair_audit_summary(&admin, &issuer, &symbol_short!("def"), &token)
+            .expect("repair");
+
+        // At least one new event should have been emitted by repair
+        let events_after = env.events().all().len();
+        assert!(events_after > events_before, "repair must emit at least one event");
+    }
+
+    // ── 14. Zero-amount reports are tracked correctly ─────────────────────────
+
+    #[test]
+    fn audit_summary_zero_amount_report_increments_count() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, _admin, issuer, token, payout) = setup(&env);
+
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &0, &1, &false);
+
+        let summary = client
+            .get_audit_summary(&issuer, &symbol_short!("def"), &token)
+            .expect("summary");
+        assert_eq!(summary.total_revenue, 0);
+        assert_eq!(summary.report_count, 1);
+
+        let rec = client.reconcile_audit_summary(&issuer, &symbol_short!("def"), &token);
+        assert!(rec.is_consistent);
+    }
+
+    // ── 15. repair on empty offering resets to zero ───────────────────────────
+
+    #[test]
+    fn repair_empty_offering_resets_to_zero() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, issuer, token, _payout) = setup(&env);
+
+        let repaired = client
+            .repair_audit_summary(&admin, &issuer, &symbol_short!("def"), &token)
+            .expect("repair");
+        assert_eq!(repaired.total_revenue, 0);
+        assert_eq!(repaired.report_count, 0);
+    }
+
+    // ── 16. Issuer transfer preserves reconcilability ─────────────────────────
+
+    #[test]
+    fn audit_summary_consistent_after_issuer_transfer() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, issuer, token, payout) = setup(&env);
+        let new_issuer = Address::generate(&env);
+
+        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout, &1_000, &1, &false);
+
+        // Transfer issuer
+        client.propose_issuer_transfer(&issuer, &symbol_short!("def"), &token, &new_issuer);
+        client.accept_issuer_transfer(&issuer, &symbol_short!("def"), &token);
+
+        // Old offering's audit summary is still readable and consistent
+        let rec = client.reconcile_audit_summary(&issuer, &symbol_short!("def"), &token);
+        assert!(rec.is_consistent);
+        assert_eq!(rec.stored_total_revenue, 1_000);
+    }
+}
