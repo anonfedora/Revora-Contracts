@@ -39,11 +39,16 @@ pub enum VestingDataKey {
     Admin,
     ScheduleCount(Address),
     Schedule(Address, u32),
+    /// Number of partial claim records stored for a schedule
+    ClaimCount(Address, u32),
+    /// Partial claim record for (admin, schedule_index, claim_index)
+    ClaimRecord(Address, u32, u32),
 }
 
 const EVENT_VESTING_CREATED: Symbol = symbol_short!("vest_crt");
 const EVENT_VESTING_CLAIMED: Symbol = symbol_short!("vest_clm");
 const EVENT_VESTING_CANCELLED: Symbol = symbol_short!("vest_can");
+const EVENT_VESTING_PCLAIM: Symbol = symbol_short!("vest_pcl");
 
 #[contract]
 pub struct RevoraVesting;
@@ -210,6 +215,81 @@ impl RevoraVesting {
             (schedule_index, schedule.token, claimable),
         );
         Ok(claimable)
+    }
+
+    /// Claim a specific amount of currently claimable tokens (partial claim).
+    /// Emits a dedicated partial-claim event and records the claim in history.
+    pub fn claim_vesting_partial(
+        env: Env,
+        beneficiary: Address,
+        admin: Address,
+        schedule_index: u32,
+        amount: i128,
+    ) -> Result<i128, VestingError> {
+        beneficiary.require_auth();
+        if amount <= 0 {
+            return Err(VestingError::InvalidAmount);
+        }
+        let key = VestingDataKey::Schedule(admin.clone(), schedule_index);
+        let mut schedule: VestingSchedule =
+            env.storage().persistent().get(&key).ok_or(VestingError::ScheduleNotFound)?;
+        if schedule.beneficiary != beneficiary {
+            return Err(VestingError::ScheduleNotFound);
+        }
+        if schedule.cancelled {
+            return Err(VestingError::ScheduleNotFound);
+        }
+        let vested = Self::vested_amount(&env, &schedule);
+        let claimable = vested.saturating_sub(schedule.claimed_amount);
+        if claimable <= 0 {
+            return Err(VestingError::NothingToClaim);
+        }
+        if amount > claimable {
+            return Err(VestingError::InvalidAmount);
+        }
+
+        // Update claimed and persist
+        schedule.claimed_amount = schedule.claimed_amount.saturating_add(amount);
+        env.storage().persistent().set(&key, &schedule);
+
+        // Transfer tokens from this contract to beneficiary
+        let contract_addr = env.current_contract_address();
+        token::Client::new(&env, &schedule.token).transfer(&contract_addr, &beneficiary, &amount);
+
+        // Record claim history: append (timestamp, amount)
+        let cnt_key = VestingDataKey::ClaimCount(admin.clone(), schedule_index);
+        let count: u32 = env.storage().persistent().get(&cnt_key).unwrap_or(0);
+        let rec_key = VestingDataKey::ClaimRecord(admin.clone(), schedule_index, count);
+        let record: (u64, i128) = (env.ledger().timestamp(), amount);
+        env.storage().persistent().set(&rec_key, &record);
+        env.storage().persistent().set(&cnt_key, &(count + 1));
+
+        // Emit event for partial claim
+        env.events().publish(
+            (EVENT_VESTING_PCLAIM, beneficiary.clone(), admin),
+            (schedule_index, schedule.token, amount, count),
+        );
+        Ok(amount)
+    }
+
+    /// Return number of partial-claim records for a schedule.
+    pub fn get_partial_claim_count(env: Env, admin: Address, schedule_index: u32) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&VestingDataKey::ClaimCount(admin, schedule_index))
+            .unwrap_or(0)
+    }
+
+    /// Return a partial-claim record (timestamp, amount) by index.
+    pub fn get_partial_claim_record(
+        env: Env,
+        admin: Address,
+        schedule_index: u32,
+        claim_index: u32,
+    ) -> Option<(u64, i128)> {
+        env.storage()
+            .persistent()
+            .get(&VestingDataKey::ClaimRecord(admin, schedule_index, claim_index))
     }
 
     /// Query a schedule by admin and index.
