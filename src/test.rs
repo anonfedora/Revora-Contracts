@@ -865,8 +865,9 @@ fn negative_revenue_amount() {
 
 #[test]
 fn it_emits_events_on_register_and_report() {
-    let (env, _client, _issuer, _token, _payout_asset, _amount, _period_id) =
-        setup_with_revenue_report(1_000_000, 1);
+    let env = Env::default();
+    let (_client, _issuer, _token, _payout_asset, _amount, _period_id) =
+        setup_with_revenue_report(&env, 1_000_000, 1);
     assert!(legacy_events(&env).len() >= 2);
 }
 
@@ -951,7 +952,8 @@ fn fuzz_period_and_amount_boundaries_do_not_panic() {
 
 #[test]
 fn fuzz_period_and_amount_repeatable_sweep_do_not_panic() {
-    let (env, client, issuer, token, payout_asset) = setup_with_offering();
+    let env = Env::default();
+    let (client, issuer, token, payout_asset) = setup_with_offering(&env);
 
     // Same seed must produce the exact same sequence.
     let mut seed_a = 0x00A1_1CE5_ED19_u64;
@@ -1149,21 +1151,21 @@ fn pending_periods_page_and_claimable_chunk_consistent() {
 }
 
 /// Helper (#30): create env, client, and one registered offering. Returns (env, client, issuer, token, payout_asset).
-fn setup_with_offering() -> (Env, RevoraRevenueShareClient<'static>, Address, Address, Address) {
-    let env = Env::default();
-    let (client, issuer) = setup(&env);
-    let token = Address::generate(&env);
-    let payout_asset = Address::generate(&env);
+fn setup_with_offering<'a>(env: &'a Env) -> (RevoraRevenueShareClient<'a>, Address, Address, Address) {
+    let (client, issuer) = setup(env);
+    let token = Address::generate(env);
+    let payout_asset = Address::generate(env);
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
-    (env, client, issuer, token, payout_asset)
+    (client, issuer, token, payout_asset)
 }
 
 /// Helper (#30): create env, client, one offering, and one revenue report. Returns (env, client, issuer, token, payout_asset, amount, period_id).
-fn setup_with_revenue_report(
+fn setup_with_revenue_report<'a>(
+    env: &'a Env,
     amount: i128,
     period_id: u64,
-) -> (Env, RevoraRevenueShareClient<'static>, Address, Address, Address, i128, u64) {
-    let (env, client, issuer, token, payout_asset) = setup_with_offering();
+) -> (RevoraRevenueShareClient<'a>, Address, Address, Address, i128, u64) {
+    let (client, issuer, token, payout_asset) = setup_with_offering(env);
     client.report_revenue(
         &issuer,
         &symbol_short!("def"),
@@ -1173,7 +1175,7 @@ fn setup_with_revenue_report(
         &period_id,
         &false,
     );
-    (env, client, issuer, token, payout_asset, amount, period_id)
+    (client, issuer, token, payout_asset, amount, period_id)
 }
 
 #[test]
@@ -6997,14 +6999,16 @@ mod regression {
 
     #[test]
     fn min_revenue_threshold_default_is_zero() {
-        let (_env, client, issuer, token, _payout) = setup_with_offering();
+        let env = Env::default();
+    let (client, issuer, token, _payout) = setup_with_offering(&env);
         let threshold = client.get_min_revenue_threshold(&issuer, &symbol_short!("def"), &token);
         assert_eq!(threshold, 0);
     }
 
     #[test]
     fn set_min_revenue_threshold_emits_event() {
-        let (env, client, issuer, token, _payout) = setup_with_offering();
+        let env = Env::default();
+    let (client, issuer, token, _payout) = setup_with_offering(&env);
         let before = legacy_events(&env).len();
         client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &5_000);
         assert!(legacy_events(&env).len() > before);
@@ -7012,7 +7016,8 @@ mod regression {
 
     #[test]
     fn report_below_threshold_emits_event_and_skips_distribution() {
-        let (env, client, issuer, token, payout_asset) = setup_with_offering();
+        let env = Env::default();
+    let (client, issuer, token, payout_asset) = setup_with_offering(&env);
         client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &10_000);
         let events_before = legacy_events(&env).len();
         client.report_revenue(
@@ -7035,7 +7040,8 @@ mod regression {
 
     #[test]
     fn report_at_or_above_threshold_updates_state() {
-        let (_env, client, issuer, token, payout_asset) = setup_with_offering();
+        let env = Env::default();
+    let (client, issuer, token, payout_asset) = setup_with_offering(&env);
         client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &1_000);
         client.report_revenue(
             &issuer,
@@ -7065,7 +7071,8 @@ mod regression {
 
     #[test]
     fn zero_threshold_disables_check() {
-        let (_env, client, issuer, token, payout_asset) = setup_with_offering();
+        let env = Env::default();
+    let (client, issuer, token, payout_asset) = setup_with_offering(&env);
         client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &100);
         client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &0);
         client.report_revenue(
@@ -7083,7 +7090,8 @@ mod regression {
 
     #[test]
     fn min_revenue_threshold_change_emits_event() {
-        let (env, client, issuer, token, _payout) = setup_with_offering();
+        let env = Env::default();
+    let (client, issuer, token, _payout) = setup_with_offering(&env);
         client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &1_000);
         let before = legacy_events(&env).len();
         client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &2_000);
@@ -7266,7 +7274,8 @@ mod regression {
 
     #[test]
     fn report_revenue_rejects_negative_amount() {
-        let (_env, client, issuer, token, payout_asset) = setup_with_offering();
+        let env = Env::default();
+    let (client, issuer, token, payout_asset) = setup_with_offering(&env);
         let r = client.try_report_revenue(
             &issuer,
             &symbol_short!("def"),
@@ -7281,7 +7290,8 @@ mod regression {
 
     #[test]
     fn report_revenue_accepts_zero_amount() {
-        let (_env, client, issuer, token, payout_asset) = setup_with_offering();
+        let env = Env::default();
+    let (client, issuer, token, payout_asset) = setup_with_offering(&env);
         let r = client.try_report_revenue(
             &issuer,
             &symbol_short!("def"),
@@ -7296,14 +7306,16 @@ mod regression {
 
     #[test]
     fn set_min_revenue_threshold_rejects_negative() {
-        let (_env, client, issuer, token, _payout_asset) = setup_with_offering();
+        let env = Env::default();
+    let (client, issuer, token, _payout_asset) = setup_with_offering(&env);
         let r = client.try_set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &-1);
         assert!(r.is_err());
     }
 
     #[test]
     fn set_min_revenue_threshold_accepts_zero() {
-        let (_env, client, issuer, token, _payout_asset) = setup_with_offering();
+        let env = Env::default();
+    let (client, issuer, token, _payout_asset) = setup_with_offering(&env);
         let r = client.try_set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &0);
         assert!(r.is_ok());
     }
