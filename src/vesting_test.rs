@@ -1,17 +1,26 @@
 use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
-    Address, Env,
+    symbol_short,
+    testutils::{Address as _, Events as _, Ledger as _},
+    Address, Env, IntoVal,
 };
 
-use crate::vesting::{RevoraVesting, RevoraVestingClient};
+use crate::vesting::{RevoraVesting, RevoraVestingClient, VESTING_EVENT_SCHEMA_VERSION};
 
-fn setup(env: &Env) -> (RevoraVestingClient<'_>, Address, Address, Address) {
+fn setup(env: &Env) -> (RevoraVestingClient, Address, Address, Address) {
     let contract_id = env.register_contract(None, RevoraVesting);
     let client = RevoraVestingClient::new(env, &contract_id);
     let admin = Address::generate(env);
     let beneficiary = Address::generate(env);
     let token_id = env.register_stellar_asset_contract(admin.clone());
     (client, admin, beneficiary, token_id)
+}
+
+fn mint_tokens(env: &Env, payment_token: &Address, recipient: &Address, amount: &i128) {
+    soroban_sdk::token::StellarAssetClient::new(env, payment_token).mint(recipient, amount);
+}
+
+fn balance(env: &Env, payment_token: &Address, who: &Address) -> i128 {
+    soroban_sdk::token::Client::new(env, payment_token).balance(who)
 }
 
 #[test]
@@ -109,4 +118,52 @@ fn cliff_longer_than_duration_rejected() {
     client.initialize_vesting(&admin);
     let r = client.try_create_schedule(&admin, &beneficiary, &token_id, &1000, &1000, &2000, &1000);
     assert!(r.is_err());
+}
+
+#[test]
+fn event_schema_version_is_stable() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _beneficiary, _token_id) = setup(&env);
+    client.initialize_vesting(&admin);
+
+    assert_eq!(client.get_event_schema_version(), VESTING_EVENT_SCHEMA_VERSION);
+    assert_eq!(client.get_event_schema_version(), 1);
+}
+
+#[test]
+fn create_schedule_emits_legacy_and_v1_events() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, beneficiary, token_id) = setup(&env);
+    let contract_id = client.address.clone();
+    client.initialize_vesting(&admin);
+
+    let idx =
+        client.create_schedule(&admin, &beneficiary, &token_id, &1_000_000, &1000, &250, &2000);
+    assert_eq!(idx, 0);
+
+    let events = env.events().all();
+    let legacy = (
+        contract_id.clone(),
+        (symbol_short!("vest_crt"), admin.clone(), beneficiary.clone()).into_val(&env),
+        (token_id.clone(), 1_000_000_i128, 1000_u64, 1250_u64, 3000_u64, 0_u32).into_val(&env),
+    );
+    let v1 = (
+        contract_id,
+        (symbol_short!("vst_crt1"), admin, beneficiary).into_val(&env),
+        (
+            VESTING_EVENT_SCHEMA_VERSION,
+            token_id,
+            1_000_000_i128,
+            1000_u64,
+            1250_u64,
+            3000_u64,
+            0_u32,
+        )
+            .into_val(&env),
+    );
+
+    assert!(events.contains(&legacy));
+    assert!(events.contains(&v1));
 }
