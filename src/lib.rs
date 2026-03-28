@@ -197,7 +197,7 @@ const BPS_DENOMINATOR: i128 = 10_000;
 /// Offerings are immutable once registered.
 // ── Data structures ──────────────────────────────────────────
 /// Contract version identifier (#23). Bumped when storage or semantics change; used for migration and compatibility.
-pub const CONTRACT_VERSION: u32 = 3;
+pub const CONTRACT_VERSION: u32 = 4;
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -897,6 +897,29 @@ impl RevoraRevenueShare {
         Ok(())
     }
 
+    /// Return the locked payment token for an offering.
+    ///
+    /// Backward compatibility: older offerings may not have an explicit `PaymentToken` entry yet.
+    /// In that case, the offering's configured `payout_asset` is treated as the canonical lock.
+    fn get_locked_payment_token_for_offering(
+        env: &Env,
+        offering_id: &OfferingId,
+    ) -> Result<Address, RevoraError> {
+        let pt_key = DataKey::PaymentToken(offering_id.clone());
+        if let Some(payment_token) = env.storage().persistent().get::<DataKey, Address>(&pt_key) {
+            return Ok(payment_token);
+        }
+
+        let offering = Self::get_offering(
+            env.clone(),
+            offering_id.issuer.clone(),
+            offering_id.namespace.clone(),
+            offering_id.token.clone(),
+        )
+        .ok_or(RevoraError::OfferingNotFound)?;
+        Ok(offering.payout_asset)
+    }
+
     /// Internal helper for revenue deposits.
     /// Validates amount using the Negative Amount Validation Matrix (#163).
     fn do_deposit_revenue(
@@ -954,14 +977,16 @@ impl RevoraRevenueShare {
             }
         }
 
-        // Store or validate payment token for this offering
+        // Enforce the offering's locked payment token. For legacy offerings without an
+        // explicit storage entry yet, `payout_asset` is the canonical lock and is persisted
+        // only after a successful deposit using that token.
+        let locked_payment_token = Self::get_locked_payment_token_for_offering(env, &offering_id)?;
+        if locked_payment_token != payment_token {
+            return Err(RevoraError::PaymentTokenMismatch);
+        }
         let pt_key = DataKey::PaymentToken(offering_id.clone());
-        if let Some(existing_pt) = env.storage().persistent().get::<DataKey, Address>(&pt_key) {
-            if existing_pt != payment_token {
-                return Err(RevoraError::PaymentTokenMismatch);
-            }
-        } else {
-            env.storage().persistent().set(&pt_key, &payment_token);
+        if !env.storage().persistent().has(&pt_key) {
+            env.storage().persistent().set(&pt_key, &locked_payment_token);
         }
 
         // Transfer tokens from issuer to contract
@@ -1349,6 +1374,20 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
             tokens.push_back(page.get(i).unwrap().token);
         }
         tokens
+    }
+
+    /// Return the locked payment token for an offering.
+    ///
+    /// For offerings created before explicit payment-token lock storage existed, this falls back
+    /// to the offering's configured `payout_asset`, which is treated as the canonical lock.
+    pub fn get_payment_token(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+    ) -> Option<Address> {
+        let offering_id = OfferingId { issuer, namespace, token };
+        Self::get_locked_payment_token_for_offering(&env, &offering_id).ok()
     }
 
     /// Record a revenue report for an offering; updates audit summary and emits events.
@@ -3222,8 +3261,7 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
 
         // Transfer only if there is a positive payout
         if total_payout > 0 {
-            let pt_key = DataKey::PaymentToken(offering_id.clone());
-            let payment_token: Address = env.storage().persistent().get(&pt_key).unwrap();
+            let payment_token = Self::get_locked_payment_token_for_offering(&env, &offering_id)?;
             let contract_addr = env.current_contract_address();
             if token::Client::new(&env, &payment_token).try_transfer(
                 &contract_addr,

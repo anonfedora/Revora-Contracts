@@ -166,6 +166,7 @@ fn register_offering_missing_auth_no_mutation() {
         .try_register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &token, &0)
         .is_err());
     assert_eq!(client.get_offering_count(&issuer, &symbol_short!("def")), 0);
+    assert_eq!(client.get_payment_token(&issuer, &symbol_short!("def"), &token), None);
 }
 
 #[test]

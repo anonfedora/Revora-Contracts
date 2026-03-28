@@ -2698,6 +2698,41 @@ fn deposit_revenue_stores_period_data() {
 }
 
 #[test]
+fn register_offering_locks_payment_token_before_first_deposit() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+    let offering_token = Address::generate(&env);
+    let payout_asset = Address::generate(&env);
+
+    client.register_offering(
+        &issuer,
+        &symbol_short!("def"),
+        &offering_token,
+        &5_000,
+        &payout_asset,
+        &0,
+    );
+
+    assert_eq!(
+        client.get_payment_token(&issuer, &symbol_short!("def"), &offering_token),
+        Some(payout_asset)
+    );
+}
+
+#[test]
+fn get_payment_token_returns_none_for_unknown_offering() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+    let offering_token = Address::generate(&env);
+
+    assert_eq!(client.get_payment_token(&issuer, &symbol_short!("def"), &offering_token), None);
+}
+
+#[test]
 fn deposit_revenue_multiple_periods() {
     let (_env, client, issuer, token, payment_token, _contract_id) = claim_setup();
 
@@ -2741,17 +2776,15 @@ fn deposit_revenue_fails_for_duplicate_period() {
 }
 
 #[test]
-fn deposit_revenue_fails_for_payment_token_mismatch() {
-    let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
+fn deposit_revenue_preserves_locked_payment_token_across_deposits() {
+    let (_env, client, issuer, token, payment_token, _contract_id) = claim_setup();
 
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
-
-    // Try to deposit with a different payment token
-    let (other_pt, other_admin) = create_payment_token(&env);
-    mint_tokens(&env, &other_pt, &other_admin, &issuer, &1_000_000);
-    let result =
-        client.try_deposit_revenue(&issuer, &symbol_short!("def"), &token, &other_pt, &100_000, &2);
-    assert!(result.is_err());
+    client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &200_000, &2);
+    assert_eq!(
+        client.get_payment_token(&issuer, &symbol_short!("def"), &token),
+        Some(payment_token)
+    );
 }
 
 #[test]
@@ -2778,7 +2811,7 @@ fn report_revenue_rejects_mismatched_payout_asset() {
 }
 
 #[test]
-fn deposit_revenue_rejects_mismatched_payout_asset_on_first_deposit() {
+fn first_deposit_uses_registered_payment_token_lock() {
     let env = Env::default();
     env.mock_all_auths();
     let contract_id = env.register_contract(None, RevoraRevenueShare);
@@ -2786,7 +2819,6 @@ fn deposit_revenue_rejects_mismatched_payout_asset_on_first_deposit() {
     let issuer = Address::generate(&env);
     let offering_token = Address::generate(&env);
     let (configured_asset, configured_admin) = create_payment_token(&env);
-    let (wrong_asset, wrong_admin) = create_payment_token(&env);
 
     client.register_offering(
         &issuer,
@@ -2796,18 +2828,42 @@ fn deposit_revenue_rejects_mismatched_payout_asset_on_first_deposit() {
         &configured_asset,
         &0,
     );
-    mint_tokens(&env, &wrong_asset, &wrong_admin, &issuer, &1_000_000);
     mint_tokens(&env, &configured_asset, &configured_admin, &issuer, &1_000_000);
 
-    let r = client.try_deposit_revenue(
+    client.deposit_revenue(
         &issuer,
         &symbol_short!("def"),
         &offering_token,
-        &wrong_asset,
+        &configured_asset,
         &100_000,
         &1,
     );
-    assert!(r.is_err());
+    assert_eq!(client.get_period_count(&issuer, &symbol_short!("def"), &offering_token), 1);
+    assert_eq!(
+        client.get_payment_token(&issuer, &symbol_short!("def"), &offering_token),
+        Some(configured_asset)
+    );
+}
+
+#[test]
+fn snapshot_deposit_preserves_registered_payment_token_lock() {
+    let (_env, client, issuer, token, payment_token, _contract_id) = claim_setup();
+
+    client.set_snapshot_config(&issuer, &symbol_short!("def"), &token, &true);
+
+    client.deposit_revenue_with_snapshot(
+        &issuer,
+        &symbol_short!("def"),
+        &token,
+        &payment_token,
+        &100_000,
+        &1,
+        &42,
+    );
+    assert_eq!(
+        client.get_payment_token(&issuer, &symbol_short!("def"), &token),
+        Some(payment_token)
+    );
 }
 
 #[test]
