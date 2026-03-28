@@ -59,7 +59,9 @@ pub enum RevoraError {
     /// Amount is invalid (e.g. negative for deposit, or out of allowed range) (#35).
     InvalidAmount = 21,
     /// period_id is invalid (e.g. zero when required to be positive) (#35).
+    /// period_id not strictly greater than previous (violates ordering invariant).
     InvalidPeriodId = 22,
+
     /// Deposit would exceed the offering's supply cap (#96).
     SupplyCapExceeded = 23,
     /// Metadata format is invalid for configured scheme rules.
@@ -103,29 +105,31 @@ const EVENT_REVENUE_REPORT_OVERRIDE: Symbol = symbol_short!("rev_ovrd");
 const EVENT_REVENUE_REPORT_OVERRIDE_ASSET: Symbol = symbol_short!("rev_ovra");
 const EVENT_REVENUE_REPORT_REJECTED: Symbol = symbol_short!("rev_rej");
 const EVENT_REVENUE_REPORT_REJECTED_ASSET: Symbol = symbol_short!("rev_reja");
-// Versioned event symbols (v1). We emit legacy events for compatibility
-// and also emit explicit v1 events that include a leading `version` field.
-const EVENT_OFFER_REG_V1: Symbol = symbol_short!("ofr_reg1");
-const EVENT_REV_INIT_V1: Symbol = symbol_short!("rv_init1");
-const EVENT_REV_INIA_V1: Symbol = symbol_short!("rv_inia1");
-const EVENT_REV_REP_V1: Symbol = symbol_short!("rv_rep1");
-const EVENT_REV_REPA_V1: Symbol = symbol_short!("rv_repa1");
+pub const EVENT_SCHEMA_VERSION_V2: u32 = 2;
 
-const EVENT_SCHEMA_VERSION: u32 = 1;
-const EVENT_CONCENTRATION_WARNING: Symbol = symbol_short!("conc_warn");
-const EVENT_REV_DEPOSIT: Symbol = symbol_short!("rev_dep");
-const EVENT_REV_DEP_SNAP: Symbol = symbol_short!("rev_snap");
-const EVENT_CLAIM: Symbol = symbol_short!("claim");
-const EVENT_SHARE_SET: Symbol = symbol_short!("share_set");
-const EVENT_FREEZE: Symbol = symbol_short!("freeze");
-const EVENT_CLAIM_DELAY_SET: Symbol = symbol_short!("delay_set");
+// Versioned event symbols (v2). All core events emit with leading `version` field.
+const EVENT_OFFER_REG_V2: Symbol = symbol_short!("ofr_reg2");
+const EVENT_REV_INIT_V2: Symbol = symbol_short!("rv_init2");
+const EVENT_REV_INIA_V2: Symbol = symbol_short!("rv_inia2");
+const EVENT_REV_REP_V2: Symbol = symbol_short!("rv_rep2");
+const EVENT_REV_REPA_V2: Symbol = symbol_short!("rv_repa2");
+const EVENT_REV_DEPOSIT_V2: Symbol = symbol_short!("rev_dep2");
+const EVENT_REV_DEP_SNAP_V2: Symbol = symbol_short!("rev_snp2");
+const EVENT_CLAIM_V2: Symbol = symbol_short!("claim2");
+const EVENT_SHARE_SET_V2: Symbol = symbol_short!("sh_set2");
+const EVENT_FREEZE_V2: Symbol = symbol_short!("frz2");
+const EVENT_CLAIM_DELAY_SET_V2: Symbol = symbol_short!("dly_set2");
+const EVENT_CONCENTRATION_WARNING_V2: Symbol = symbol_short!("conc2");
 
-const EVENT_PROPOSAL_CREATED: Symbol = symbol_short!("prop_new");
+const EVENT_PROPOSAL_CREATED_V2: Symbol = symbol_short!("prop_n2");
+const EVENT_PROPOSAL_APPROVED_V2: Symbol = symbol_short!("prop_a2");
+const EVENT_PROPOSAL_EXECUTED_V2: Symbol = symbol_short!("prop_e2");
 const EVENT_PROPOSAL_APPROVED: Symbol = symbol_short!("prop_app");
 const EVENT_PROPOSAL_EXECUTED: Symbol = symbol_short!("prop_exe");
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
+#[derive(proptest::prelude::Arbitrary)]
 pub enum ProposalAction {
     SetAdmin(Address),
     Freeze,
@@ -133,6 +137,7 @@ pub enum ProposalAction {
     AddOwner(Address),
     RemoveOwner(Address),
 }
+
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -382,7 +387,10 @@ pub enum RoundingMode {
 /// `RevenueIndex` and `RevenueReports` track reported (un-deposited) revenue totals and details.
 #[contracttype]
 pub enum DataKey {
+    /// Last deposited/reported period_id for offering (enforces strictly increasing ordering).
+    LastPeriodId(OfferingId),
     Blacklist(OfferingId),
+
     /// Per-offering whitelist; when non-empty, only these addresses are eligible for distribution.
     Whitelist(OfferingId),
     /// Per-offering: blacklist addresses in insertion order for deterministic get_blacklist (#38).
@@ -448,8 +456,7 @@ pub enum DataKey {
     /// Global pause flag; when true, state-mutating ops are disabled (#7).
     Paused,
 
-    /// Feature flag: emit versioned events when present (v1 schema).
-    EventVersioningEnabled,
+
 
     /// Configuration flag: when true, contract is event-only (no persistent business state).
     EventOnlyMode,
@@ -729,10 +736,7 @@ pub struct RevoraRevenueShare;
 impl RevoraRevenueShare {
     const META_AUTH_VERSION: u32 = 1;
 
-    fn is_event_versioning_enabled(env: Env) -> bool {
-        let key = DataKey::EventVersioningEnabled;
-        env.storage().persistent().get::<DataKey, bool>(&key).unwrap_or(false)
-    }
+
 
     /// Returns error if contract is frozen (#32). Call at start of state-mutating entrypoints.
     fn require_not_frozen(env: &Env) -> Result<(), RevoraError> {
@@ -741,6 +745,17 @@ impl RevoraRevenueShare {
             return Err(RevoraError::ContractFrozen);
         }
         Ok(())
+    }
+
+    /// Helper to emit deterministic v2 versioned events for core event versioning.
+    /// Emits: topic -> (EVENT_SCHEMA_VERSION_V2, data...)
+    /// All core events MUST use this for schema compliance and indexer compatibility.
+    fn emit_v2_event<T: IntoVal<Env, Vec>>(
+        env: &Env,
+        topic_tuple: impl IntoVal<Env, (Symbol,)>,
+        data: T,
+    ) {
+        env.events().publish(topic_tuple, (EVENT_SCHEMA_VERSION_V2, data));
     }
 
     fn validate_window(window: &AccessWindow) -> Result<(), RevoraError> {
@@ -879,6 +894,10 @@ impl RevoraRevenueShare {
             return Err(RevoraError::OfferingNotFound);
         }
 
+        // Enforce period ordering invariant (double-check at deposit)
+        Self::require_next_period_id(env, &offering_id, period_id)?;
+
+
         // Check period not already deposited
         let rev_key = DataKey::PeriodRevenue(offering_id.clone(), period_id);
         if env.storage().persistent().has(&rev_key) {
@@ -942,9 +961,11 @@ impl RevoraRevenueShare {
             );
         }
 
-        env.events().publish(
-            (EVENT_REV_DEPOSIT, issuer, namespace, token),
-            (payment_token, amount, period_id),
+        /// Versioned event v2: [version: u32, payment_token: Address, amount: i128, period_id: u64]
+        Self::emit_v2_event(
+            env,
+            (EVENT_REV_DEPOSIT_V2, issuer.clone(), namespace.clone(), token.clone()),
+            (payment_token, amount, period_id)
         );
         Ok(())
     }
@@ -969,14 +990,21 @@ impl RevoraRevenueShare {
         Ok(())
     }
 
-    /// Input validation (#35): require period_id > 0 where 0 would be ambiguous.
-    #[allow(dead_code)]
-    fn require_valid_period_id(period_id: u64) -> Result<(), RevoraError> {
-        if period_id == 0 {
-            return Err(RevoraError::InvalidPeriodId);
-        }
-        Ok(())
+/// Require period_id is valid next in strictly increasing sequence for offering.
+/// Panics if offering not found.
+fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -> Result<(), RevoraError> {
+    if period_id == 0 {
+        return Err(RevoraError::InvalidPeriodId);
     }
+    let key = DataKey::LastPeriodId(offering_id.clone());
+    let last: u64 = env.storage().persistent().get(&key).unwrap_or(0);
+    if period_id <= last {
+        return Err(RevoraError::InvalidPeriodId);
+    }
+    env.storage().persistent().set(&key, &period_id);
+    Ok(())
+}
+
 
     /// Initialize the contract with an admin and an optional safety role.
     ///
@@ -1315,6 +1343,9 @@ impl RevoraRevenueShare {
         };
         Self::require_report_window_open(&env, &offering_id)?;
 
+        // Enforce period ordering invariant
+        Self::require_next_period_id(&env, &offering_id, period_id)?;
+
         if !event_only {
             // Verify offering exists and issuer is current
             let current_issuer =
@@ -1350,6 +1381,7 @@ impl RevoraRevenueShare {
                 }
             }
         }
+
 
         let blacklist = if event_only {
             Vec::new(&env)
@@ -1547,21 +1579,26 @@ impl RevoraRevenueShare {
                 (EVENT_SCHEMA_VERSION, amount, period_id, blacklist.clone()),
             );
 
-            env.events().publish(
-                (EVENT_REV_INIA_V1, issuer.clone(), namespace.clone(), token.clone()),
-                (EVENT_SCHEMA_VERSION, payout_asset.clone(), amount, period_id, blacklist.clone()),
-            );
+        /// Versioned event v2: [version: u32, payout_asset: Address, amount: i128, period_id: u64, blacklist: Vec<Address>]
+        Self::emit_v2_event(
+            &env,
+            (EVENT_REV_INIA_V2, issuer.clone(), namespace.clone(), token.clone()),
+            (payout_asset.clone(), amount, period_id, blacklist.clone())
+        );
 
-            env.events().publish(
-                (EVENT_REV_REP_V1, issuer.clone(), namespace.clone(), token.clone()),
-                (EVENT_SCHEMA_VERSION, amount, period_id, blacklist.clone()),
-            );
+        /// Versioned event v2: [version: u32, amount: i128, period_id: u64, blacklist: Vec<Address>]
+        Self::emit_v2_event(
+            &env,
+            (EVENT_REV_REP_V2, issuer.clone(), namespace.clone(), token.clone()),
+            (amount, period_id, blacklist.clone())
+        );
 
-            env.events().publish(
-                (EVENT_REV_REPA_V1, issuer.clone(), namespace.clone(), token.clone()),
-                (EVENT_SCHEMA_VERSION, payout_asset.clone(), amount, period_id),
-            );
-        }
+        /// Versioned event v2: [version: u32, payout_asset: Address, amount: i128, period_id: u64]
+        Self::emit_v2_event(
+            &env,
+            (EVENT_REV_REPA_V2, issuer.clone(), namespace.clone(), token.clone()),
+            (payout_asset.clone(), amount, period_id)
+        );
 
         Ok(())
     }
@@ -2410,9 +2447,11 @@ impl RevoraRevenueShare {
 
         // 4. Update last snapshot and emit specialized event
         env.storage().persistent().set(&snap_key, &snapshot_reference);
-        env.events().publish(
-            (EVENT_REV_DEP_SNAP, issuer, namespace, token),
-            (payment_token, amount, period_id, snapshot_reference),
+        /// Versioned event v2: [version: u32, payment_token: Address, amount: i128, period_id: u64, snapshot_reference: u64]
+        Self::emit_v2_event(
+            &env,
+            (EVENT_REV_DEP_SNAP_V2, issuer.clone(), namespace.clone(), token.clone()),
+            (payment_token, amount, period_id, snapshot_reference)
         );
 
         Ok(())
@@ -3352,7 +3391,8 @@ impl RevoraRevenueShare {
         admin.require_auth();
         let frozen_key = DataKey::Frozen;
         env.storage().persistent().set(&frozen_key, &true);
-        env.events().publish((EVENT_FREEZE, admin), true);
+        /// Versioned event v2: [version: u32, frozen: bool]
+        Self::emit_v2_event(&env, (EVENT_FREEZE_V2,), true);
         Ok(())
     }
 
