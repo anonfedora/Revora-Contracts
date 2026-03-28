@@ -44,6 +44,12 @@ pub enum VestingDataKey {
 const EVENT_VESTING_CREATED: Symbol = symbol_short!("vest_crt");
 const EVENT_VESTING_CLAIMED: Symbol = symbol_short!("vest_clm");
 const EVENT_VESTING_CANCELLED: Symbol = symbol_short!("vest_can");
+const EVENT_VESTING_CREATED_V1: Symbol = symbol_short!("vst_crt1");
+const EVENT_VESTING_CLAIMED_V1: Symbol = symbol_short!("vst_clm1");
+const EVENT_VESTING_CANCELLED_V1: Symbol = symbol_short!("vst_can1");
+
+/// Version tag for versioned vesting event payloads.
+pub const VESTING_EVENT_SCHEMA_VERSION: u32 = 1;
 
 #[contract]
 pub struct RevoraVesting;
@@ -117,6 +123,18 @@ impl RevoraVesting {
             (EVENT_VESTING_CREATED, admin, beneficiary),
             (token, total_amount, start_time, cliff_time, end_time, count),
         );
+        env.events().publish(
+            (EVENT_VESTING_CREATED_V1, admin, beneficiary),
+            (
+                VESTING_EVENT_SCHEMA_VERSION,
+                token,
+                total_amount,
+                start_time,
+                cliff_time,
+                end_time,
+                count,
+            ),
+        );
         Ok(count)
     }
 
@@ -150,6 +168,14 @@ impl RevoraVesting {
         env.events().publish(
             (EVENT_VESTING_CANCELLED, admin, beneficiary),
             (schedule_index, schedule.token.clone()),
+        );
+        env.events().publish(
+            (EVENT_VESTING_CANCELLED_V1, admin, beneficiary),
+            (
+                VESTING_EVENT_SCHEMA_VERSION,
+                schedule_index,
+                schedule.token.clone(),
+            ),
         );
         Ok(())
     }
@@ -209,6 +235,15 @@ impl RevoraVesting {
             (EVENT_VESTING_CLAIMED, beneficiary.clone(), admin),
             (schedule_index, schedule.token, claimable),
         );
+        env.events().publish(
+            (EVENT_VESTING_CLAIMED_V1, beneficiary.clone(), admin),
+            (
+                VESTING_EVENT_SCHEMA_VERSION,
+                schedule_index,
+                schedule.token,
+                claimable,
+            ),
+        );
         Ok(claimable)
     }
 
@@ -237,5 +272,11 @@ impl RevoraVesting {
     /// Number of schedules created by an admin.
     pub fn get_schedule_count(env: Env, admin: Address) -> u32 {
         env.storage().persistent().get(&VestingDataKey::ScheduleCount(admin)).unwrap_or(0)
+    }
+
+    /// Returns the current vesting event schema version.
+    pub fn get_event_schema_version(env: Env) -> u32 {
+        let _ = env;
+        VESTING_EVENT_SCHEMA_VERSION
     }
 }
