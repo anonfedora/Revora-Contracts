@@ -3,7 +3,7 @@ use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, String as
 
 use crate::{RevoraRevenueShare, RevoraRevenueShareClient, RoundingMode};
 
-fn make_client(env: &Env) -> RevoraRevenueShareClient<'_> {
+fn make_client(env: &Env) -> RevoraRevenueShareClient {
     let id = env.register_contract(None, RevoraRevenueShare);
     RevoraRevenueShareClient::new(env, &id)
 }
