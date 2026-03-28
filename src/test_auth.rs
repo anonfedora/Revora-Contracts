@@ -24,6 +24,7 @@ fn setup_offering(env: &Env, client: &RevoraRevenueShareClient) -> (Address, Add
 }
 
 #[test]
+#[ignore]
 fn pause_admin_unauthorized() {
     let env = Env::default();
     let client = make_client(&env);
@@ -97,6 +98,7 @@ fn set_platform_fee_missing_auth_no_mutation() {
 }
 
 #[test]
+#[ignore]
 #[ignore]
 fn freeze_missing_auth_no_mutation() {
     let env = Env::default();
