@@ -5063,6 +5063,10 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
     }
 }
 
+/// Security Assertions Module
+/// Provides production-grade security validation, input validation, and error handling.
+pub mod security_assertions;
+
 pub mod vesting;
 
 #[cfg(test)]
