@@ -179,8 +179,14 @@ const EVENT_META_SIGNER_SET: Symbol = symbol_short!("meta_key");
 const EVENT_META_DELEGATE_SET: Symbol = symbol_short!("meta_del");
 const EVENT_META_SHARE_SET: Symbol = symbol_short!("meta_shr");
 const EVENT_META_REV_APPROVE: Symbol = symbol_short!("meta_rev");
+/// Emitted when payment token decimal precision is configured for an offering.
+const EVENT_DECIMAL_SET: Symbol = symbol_short!("dec_set");
 
 const BPS_DENOMINATOR: i128 = 10_000;
+/// Stellar network canonical decimal precision (7 decimal places, i.e., stroops).
+const STELLAR_CANONICAL_DECIMALS: u32 = 7;
+/// Maximum accepted decimal precision (safety cap for normalization math).
+const MAX_TOKEN_DECIMALS: u32 = 18;
 
 /// Represents a revenue-share offering registered on-chain.
 /// Offerings are immutable once registered.
@@ -468,6 +474,8 @@ pub enum DataKey {
     NamespaceCount(Address),
     NamespaceItem(Address, u32),
     NamespaceRegistered(Address, Symbol),
+    /// Decimal precision of the payout asset for an offering (defaults to 7 = Stellar canonical).
+    PaymentTokenDecimals(OfferingId),
 }
 
 /// Maximum number of offerings returned in a single page.
@@ -1275,16 +1283,7 @@ impl RevoraRevenueShare {
             (payout_asset.clone(), amount, period_id),
         );
 
-        // Audit log summary (#34): maintain per-offering total revenue and report count
-        let summary_key = DataKey::AuditSummary(offering_id.clone());
-        let mut summary: AuditSummary = env
-            .storage()
-            .persistent()
-            .get(&summary_key)
-            .unwrap_or(AuditSummary { total_revenue: 0, report_count: 0 });
-        summary.total_revenue = summary.total_revenue.saturating_add(amount);
-        summary.report_count = summary.report_count.saturating_add(1);
-        env.storage().persistent().set(&summary_key, &summary);
+
         // Optionally emit versioned v1 events for forward-compatible consumers
         if Self::is_event_versioning_enabled(env.clone()) {
             env.events().publish(
@@ -1316,7 +1315,9 @@ impl RevoraRevenueShare {
                 .persistent()
                 .get(&summary_key)
                 .unwrap_or(AuditSummary { total_revenue: 0, report_count: 0 });
-            summary.total_revenue = summary.total_revenue.saturating_add(amount);
+            let decimals = Self::get_payment_token_decimals(env.clone(), issuer.clone(), namespace.clone(), token.clone());
+            let normalized_amount = Self::normalize_amount(amount, decimals);
+            summary.total_revenue = summary.total_revenue.saturating_add(normalized_amount);
             summary.report_count = summary.report_count.saturating_add(1);
             env.storage().persistent().set(&summary_key, &summary);
         }
@@ -2051,6 +2052,83 @@ impl RevoraRevenueShare {
         let lo = core::cmp::min(0, amount);
         let hi = core::cmp::max(0, amount);
         core::cmp::min(core::cmp::max(share, lo), hi)
+    }
+
+    /// Normalize `amount` from the token's native decimal precision to Stellar's canonical 7-decimal
+    /// (stroop) precision used internally by this contract.
+    ///
+    /// - If `from_decimals == 7`: returns `amount` unchanged.
+    /// - If `from_decimals < 7`: scales **up** by `10^(7 - from_decimals)` (e.g., 6-decimal USDC → 7).
+    /// - If `from_decimals > 7`: scales **down** by `10^(from_decimals - 7)` using integer truncation.
+    ///
+    /// Returns `0` if intermediate arithmetic overflows to prevent fund inflation bugs.
+    fn normalize_amount(amount: i128, from_decimals: u32) -> i128 {
+        if from_decimals == STELLAR_CANONICAL_DECIMALS {
+            return amount;
+        }
+        if from_decimals < STELLAR_CANONICAL_DECIMALS {
+            let exp = STELLAR_CANONICAL_DECIMALS - from_decimals;
+            let factor: i128 = match 10_i128.checked_pow(exp) {
+                Some(f) => f,
+                None => return 0,
+            };
+            amount.checked_mul(factor).unwrap_or(0)
+        } else {
+            let exp = from_decimals - STELLAR_CANONICAL_DECIMALS;
+            let factor: i128 = match 10_i128.checked_pow(exp) {
+                Some(f) => f,
+                None => return 0,
+            };
+            amount.checked_div(factor).unwrap_or(0)
+        }
+    }
+
+    /// Set the decimal precision of the payout asset for an offering.
+    ///
+    /// Must be called by the offering `issuer`. Accepted range is `0..=18`.
+    /// If not set, the contract defaults to `7` (Stellar canonical stroops).
+    ///
+    /// ### Security
+    /// - Only the offering issuer may configure decimals.
+    /// - Misconfigured decimals directly affect payout arithmetic; issuers must supply
+    ///   the on-chain token's actual decimal value.
+    ///
+    /// ### Errors
+    /// - `RevoraError::NotAuthorized` if caller is not the issuer.
+    /// - `RevoraError::LimitReached` if `decimals > 18`.
+    pub fn set_payment_token_decimals(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+        decimals: u32,
+    ) -> Result<(), RevoraError> {
+        issuer.require_auth();
+        if decimals > MAX_TOKEN_DECIMALS {
+            return Err(RevoraError::LimitReached);
+        }
+        let offering_id = OfferingId { issuer: issuer.clone(), namespace: namespace.clone(), token: token.clone() };
+        env.storage()
+            .persistent()
+            .set(&DataKey::PaymentTokenDecimals(offering_id), &decimals);
+        env.events()
+            .publish((EVENT_DECIMAL_SET, issuer, namespace, token), decimals);
+        Ok(())
+    }
+
+    /// Get the configured decimal precision of the payout asset for an offering.
+    /// Defaults to `7` (Stellar canonical stroops) if not explicitly set.
+    pub fn get_payment_token_decimals(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+    ) -> u32 {
+        let offering_id = OfferingId { issuer, namespace, token };
+        env.storage()
+            .persistent()
+            .get(&DataKey::PaymentTokenDecimals(offering_id))
+            .unwrap_or(STELLAR_CANONICAL_DECIMALS)
     }
 
     // ── Multi-period aggregated claims ───────────────────────────
@@ -2821,7 +2899,15 @@ impl RevoraRevenueShare {
                 break;
             }
             let rev_key = DataKey::PeriodRevenue(offering_id.clone(), period_id);
-            let revenue: i128 = env.storage().persistent().get(&rev_key).unwrap_or(0);
+            let raw_revenue: i128 = env.storage().persistent().get(&rev_key).unwrap_or(0);
+            // Normalize revenue to canonical 7-decimal precision before computing holder's share.
+            let decimals = Self::get_payment_token_decimals(
+                env.clone(),
+                offering_id.issuer.clone(),
+                offering_id.namespace.clone(),
+                offering_id.token.clone(),
+            );
+            let revenue = Self::normalize_amount(raw_revenue, decimals);
             total += revenue * (share_bps as i128) / 10_000;
         }
         total
@@ -2886,7 +2972,15 @@ impl RevoraRevenueShare {
                 return (total, Some(idx));
             }
             let rev_key = DataKey::PeriodRevenue(offering_id.clone(), period_id);
-            let revenue: i128 = env.storage().persistent().get(&rev_key).unwrap_or(0);
+            let raw_revenue: i128 = env.storage().persistent().get(&rev_key).unwrap_or(0);
+            // Normalize revenue to canonical 7-decimal precision before computing holder's share.
+            let decimals = Self::get_payment_token_decimals(
+                env.clone(),
+                offering_id.issuer.clone(),
+                offering_id.namespace.clone(),
+                offering_id.token.clone(),
+            );
+            let revenue = Self::normalize_amount(raw_revenue, decimals);
             total += revenue * (share_bps as i128) / 10_000;
             processed = processed.saturating_add(1);
             idx = idx.saturating_add(1);
@@ -2940,43 +3034,6 @@ impl RevoraRevenueShare {
         let offering_id = OfferingId { issuer, namespace, token };
         let count_key = DataKey::PeriodCount(offering_id);
         env.storage().persistent().get(&count_key).unwrap_or(0)
-    }
-
-    /// Test helper: insert a period entry and revenue without transferring tokens.
-    /// Only compiled in test builds to avoid affecting production contract.
-    #[cfg(test)]
-    pub fn test_insert_period(
-        env: Env,
-        issuer: Address,
-        namespace: Symbol,
-        token: Address,
-        period_id: u64,
-        amount: i128,
-    ) {
-        let offering_id = OfferingId {
-            issuer: issuer.clone(),
-            namespace: namespace.clone(),
-            token: token.clone(),
-        };
-        // Append to indexed period list
-        let count_key = DataKey::PeriodCount(offering_id.clone());
-        let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
-        let entry_key = DataKey::PeriodEntry(offering_id.clone(), count);
-        env.storage().persistent().set(&entry_key, &period_id);
-        env.storage().persistent().set(&count_key, &(count + 1));
-
-        // Store period revenue and deposit time
-        let rev_key = DataKey::PeriodRevenue(offering_id.clone(), period_id);
-        env.storage().persistent().set(&rev_key, &amount);
-        let time_key = DataKey::PeriodDepositTime(offering_id.clone(), period_id);
-        let deposit_time = env.ledger().timestamp();
-        env.storage().persistent().set(&time_key, &deposit_time);
-
-        // Update cumulative deposited revenue
-        let deposited_key = DataKey::DepositedRevenue(offering_id.clone());
-        let deposited: i128 = env.storage().persistent().get(&deposited_key).unwrap_or(0);
-        let new_deposited = deposited.saturating_add(amount);
-        env.storage().persistent().set(&deposited_key, &new_deposited);
     }
 
     // ── On-chain distribution simulation (#29) ────────────────────
@@ -3998,3 +4055,36 @@ mod test;
 mod test_auth;
 mod test_cross_contract;
 mod test_namespaces;
+
+#[cfg(test)]
+impl RevoraRevenueShare {
+    /// Test helper: insert a period entry and revenue without transferring tokens.
+    /// Only compiled in test builds to avoid affecting production contract.
+    pub fn test_insert_period(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+        period_id: u64,
+        amount: i128,
+    ) {
+        let offering_id = OfferingId {
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+        };
+        let count_key = DataKey::PeriodCount(offering_id.clone());
+        let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+        let entry_key = DataKey::PeriodEntry(offering_id.clone(), count);
+        env.storage().persistent().set(&entry_key, &period_id);
+        env.storage().persistent().set(&count_key, &(count + 1));
+        let rev_key = DataKey::PeriodRevenue(offering_id.clone(), period_id);
+        env.storage().persistent().set(&rev_key, &amount);
+        let time_key = DataKey::PeriodDepositTime(offering_id.clone(), period_id);
+        let deposit_time = env.ledger().timestamp();
+        env.storage().persistent().set(&time_key, &deposit_time);
+        let deposited_key = DataKey::DepositedRevenue(offering_id.clone());
+        let deposited: i128 = env.storage().persistent().get(&deposited_key).unwrap_or(0);
+        env.storage().persistent().set(&deposited_key, &deposited.saturating_add(amount));
+    }
+}

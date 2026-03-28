@@ -106,7 +106,9 @@ fn pending_periods_page_and_claimable_chunk_consistent() {
 
     // Insert periods 1..=8 via the test helper (avoids token transfers in tests)
     for p in 1u64..=8u64 {
-        client.test_insert_period(&issuer, &symbol_short!("def"), &token, &p, &1000i128);
+        env.as_contract(&client.address, || {
+            crate::RevoraRevenueShare::test_insert_period(env.clone(), issuer.clone(), symbol_short!("def"), token.clone(), p, 1000i128);
+        });
     }
 
     // Set holder share
