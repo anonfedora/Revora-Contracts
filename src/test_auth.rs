@@ -83,7 +83,6 @@ fn unpause_safety_unauthorized() {
 
 #[test]
 #[ignore]
-#[ignore]
 fn set_testnet_mode_missing_auth() {
     let env = Env::default();
     let client = make_client(&env);
@@ -103,7 +102,6 @@ fn set_platform_fee_missing_auth_no_mutation() {
 }
 
 #[test]
-#[ignore]
 #[ignore]
 fn freeze_missing_auth_no_mutation() {
     let env = Env::default();
@@ -148,7 +146,6 @@ fn register_offering_missing_auth_no_mutation() {
 
 #[test]
 #[ignore]
-#[ignore]
 fn report_revenue_wrong_issuer_no_mutation() {
     let env = Env::default();
     let client = make_client(&env);
@@ -174,7 +171,6 @@ fn deposit_revenue_wrong_issuer_no_mutation() {
 }
 
 #[test]
-#[ignore]
 #[ignore]
 fn set_holder_share_wrong_issuer_no_mutation() {
     let env = Env::default();
@@ -202,7 +198,6 @@ fn set_concentration_limit_wrong_issuer_no_mutation() {
 }
 
 #[test]
-#[ignore]
 #[ignore]
 fn set_rounding_mode_wrong_issuer_no_mutation() {
     let env = Env::default();
@@ -232,7 +227,6 @@ fn set_min_revenue_threshold_wrong_issuer_no_mutation() {
 }
 
 #[test]
-#[ignore]
 #[ignore]
 fn set_claim_delay_wrong_issuer_no_mutation() {
     let env = Env::default();
