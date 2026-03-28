@@ -527,6 +527,11 @@ pub enum DataKey {
     NamespaceCount(Address),
     NamespaceItem(Address, u32),
     NamespaceRegistered(Address, Symbol),
+
+    /// DataKey for testing storage boundaries without affecting business state.
+    StressDataEntry(Address, u32),
+    /// Tracks total amount of dummy data allocated per admin.
+    StressDataCount(Address),
 }
 
 /// Maximum number of offerings returned in a single page.
