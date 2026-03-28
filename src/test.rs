@@ -4706,8 +4706,9 @@ fn multisig_approve_action_records_approval_and_emits_event() {
     assert!(env.events().all().len() > before);
 
     let proposal = client.get_proposal(&proposal_id).unwrap();
-    assert_eq!(proposal.approvals.len(), 1);
-    assert_eq!(proposal.approvals.get(0).unwrap(), owner3);
+    assert_eq!(proposal.approvals.len(), 2); // proposer (owner1) + owner2
+    assert_eq!(proposal.approvals.get(0).unwrap(), owner1);
+    assert_eq!(proposal.approvals.get(1).unwrap(), owner2);
 }
 
 #[test]
@@ -4914,7 +4915,7 @@ fn multisig_three_approvals_all_valid() {
     client.approve_action(&owner3, &proposal_id);
 
     let proposal = client.get_proposal(&proposal_id).unwrap();
-    assert_eq!(proposal.approvals.len(), 2);
+    assert_eq!(proposal.approvals.len(), 3); // owner1 (auto) + owner2 + owner3
     assert_eq!(proposal.approvals.get(0).unwrap(), owner1);
     assert_eq!(proposal.approvals.get(1).unwrap(), owner2);
     client.execute_action(&proposal_id);
