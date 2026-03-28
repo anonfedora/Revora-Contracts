@@ -73,6 +73,8 @@ pub enum RevoraError {
     SignatureReplay = 28,
     /// Off-chain signer key has not been registered.
     SignerKeyNotRegistered = 29,
+    /// Cross-contract token transfer failed.
+    TransferFailed = 30,
 }
 
 // ── Event symbols ────────────────────────────────────────────
@@ -895,7 +897,9 @@ impl RevoraRevenueShare {
 
         // Transfer tokens from issuer to contract
         let contract_addr = env.current_contract_address();
-        token::Client::new(env, &payment_token).transfer(&issuer, &contract_addr, &amount);
+        if token::Client::new(env, &payment_token).try_transfer(&issuer, &contract_addr, &amount).is_err() {
+            return Err(RevoraError::TransferFailed);
+        }
 
         // Store period revenue
         env.storage().persistent().set(&rev_key, &amount);
@@ -2782,11 +2786,13 @@ impl RevoraRevenueShare {
             let pt_key = DataKey::PaymentToken(offering_id.clone());
             let payment_token: Address = env.storage().persistent().get(&pt_key).unwrap();
             let contract_addr = env.current_contract_address();
-            token::Client::new(&env, &payment_token).transfer(
+            if token::Client::new(&env, &payment_token).try_transfer(
                 &contract_addr,
                 &holder,
                 &total_payout,
-            );
+            ).is_err() {
+                return Err(RevoraError::TransferFailed);
+            }
         }
 
         // Advance claim index only for periods actually claimed (respecting delay)
