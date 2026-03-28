@@ -180,6 +180,11 @@ const EVENT_META_DELEGATE_SET: Symbol = symbol_short!("meta_del");
 const EVENT_META_SHARE_SET: Symbol = symbol_short!("meta_shr");
 const EVENT_META_REV_APPROVE: Symbol = symbol_short!("meta_rev");
 
+const EVENT_CONC_LIMIT_SET: Symbol = symbol_short!("conc_lim");
+const EVENT_ROUNDING_MODE_SET: Symbol = symbol_short!("rnd_mode");
+const EVENT_MULTISIG_INIT: Symbol = symbol_short!("msig_init");
+const EVENT_ADMIN_SET: Symbol = symbol_short!("admin_set");
+const EVENT_PLATFORM_FEE_SET: Symbol = symbol_short!("fee_set");
 const BPS_DENOMINATOR: i128 = 10_000;
 
 /// Represents a revenue-share offering registered on-chain.
@@ -769,14 +774,15 @@ impl RevoraRevenueShare {
         if env.storage().persistent().has(&DataKey::Admin) {
             panic!("already initialized");
         }
-        env.storage().persistent().set(&DataKey::Admin, &admin.clone());
-        if let Some(s) = safety.clone() {
+        env.storage().persistent().set(&DataKey::Admin, &admin);
+        env.events().publish((EVENT_ADMIN_SET,), admin.clone());
+        if let Some(ref s) = safety {
             env.storage().persistent().set(&DataKey::Safety, &s);
         }
         env.storage().persistent().set(&DataKey::Paused, &false);
         let eo = event_only.unwrap_or(false);
         env.storage().persistent().set(&DataKey::EventOnlyMode, &eo);
-        env.events().publish((EVENT_INIT, admin.clone()), (safety, eo));
+        env.events().publish((EVENT_INIT, admin), (safety, eo));
     }
 
     /// Pause the contract (Admin only).
@@ -1782,6 +1788,7 @@ impl RevoraRevenueShare {
             issuer.require_auth();
             let key = DataKey::ConcentrationLimit(offering_id);
             env.storage().persistent().set(&key, &ConcentrationLimitConfig { max_bps, enforce });
+            env.events().publish((EVENT_CONC_LIMIT_SET, issuer, namespace, token), (max_bps, enforce));
         }
         Ok(())
     }
@@ -1904,6 +1911,7 @@ impl RevoraRevenueShare {
         issuer.require_auth();
         let key = DataKey::RoundingMode(offering_id);
         env.storage().persistent().set(&key, &mode);
+            env.events().publish((EVENT_ROUNDING_MODE_SET, issuer, namespace, token), mode);
         Ok(())
     }
 
@@ -2942,43 +2950,6 @@ impl RevoraRevenueShare {
         env.storage().persistent().get(&count_key).unwrap_or(0)
     }
 
-    /// Test helper: insert a period entry and revenue without transferring tokens.
-    /// Only compiled in test builds to avoid affecting production contract.
-    #[cfg(test)]
-    pub fn test_insert_period(
-        env: Env,
-        issuer: Address,
-        namespace: Symbol,
-        token: Address,
-        period_id: u64,
-        amount: i128,
-    ) {
-        let offering_id = OfferingId {
-            issuer: issuer.clone(),
-            namespace: namespace.clone(),
-            token: token.clone(),
-        };
-        // Append to indexed period list
-        let count_key = DataKey::PeriodCount(offering_id.clone());
-        let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
-        let entry_key = DataKey::PeriodEntry(offering_id.clone(), count);
-        env.storage().persistent().set(&entry_key, &period_id);
-        env.storage().persistent().set(&count_key, &(count + 1));
-
-        // Store period revenue and deposit time
-        let rev_key = DataKey::PeriodRevenue(offering_id.clone(), period_id);
-        env.storage().persistent().set(&rev_key, &amount);
-        let time_key = DataKey::PeriodDepositTime(offering_id.clone(), period_id);
-        let deposit_time = env.ledger().timestamp();
-        env.storage().persistent().set(&time_key, &deposit_time);
-
-        // Update cumulative deposited revenue
-        let deposited_key = DataKey::DepositedRevenue(offering_id.clone());
-        let deposited: i128 = env.storage().persistent().get(&deposited_key).unwrap_or(0);
-        let new_deposited = deposited.saturating_add(amount);
-        env.storage().persistent().set(&deposited_key, &new_deposited);
-    }
-
     // ── On-chain distribution simulation (#29) ────────────────────
 
     /// Read-only: simulate distribution for sample inputs without mutating state.
@@ -3079,8 +3050,9 @@ impl RevoraRevenueShare {
             return Err(RevoraError::LimitReached); // Improper threshold
         }
         env.storage().persistent().set(&DataKey::MultisigThreshold, &threshold);
-        env.storage().persistent().set(&DataKey::MultisigOwners, &owners);
+        env.storage().persistent().set(&DataKey::MultisigOwners, &owners.clone());
         env.storage().persistent().set(&DataKey::MultisigProposalCount, &0_u32);
+        env.events().publish((EVENT_MULTISIG_INIT,), (owners, threshold));
         Ok(())
     }
 
@@ -3877,6 +3849,7 @@ impl RevoraRevenueShare {
         }
 
         env.storage().persistent().set(&DataKey::PlatformFeeBps, &fee_bps);
+        env.events().publish((EVENT_PLATFORM_FEE_SET,), fee_bps);
         Ok(())
     }
 
@@ -3982,6 +3955,36 @@ impl RevoraRevenueShare {
     pub fn get_version(env: Env) -> u32 {
         let _ = env;
         CONTRACT_VERSION
+    }
+
+    /// Test helper: insert a period entry and revenue without transferring tokens.
+    /// Only compiled in test builds.
+    #[cfg(test)]
+    pub fn test_insert_period(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+        period_id: u64,
+        amount: i128,
+    ) {
+        let offering_id = OfferingId {
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+        };
+        let count_key = DataKey::PeriodCount(offering_id.clone());
+        let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+        let entry_key = DataKey::PeriodEntry(offering_id.clone(), count);
+        env.storage().persistent().set(&entry_key, &period_id);
+        env.storage().persistent().set(&count_key, &(count + 1));
+        let rev_key = DataKey::PeriodRevenue(offering_id.clone(), period_id);
+        env.storage().persistent().set(&rev_key, &amount);
+        let time_key = DataKey::PeriodDepositTime(offering_id.clone(), period_id);
+        env.storage().persistent().set(&time_key, &env.ledger().timestamp());
+        let deposited_key = DataKey::DepositedRevenue(offering_id.clone());
+        let deposited: i128 = env.storage().persistent().get(&deposited_key).unwrap_or(0);
+        env.storage().persistent().set(&deposited_key, &deposited.saturating_add(amount));
     }
 }
 
