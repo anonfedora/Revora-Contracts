@@ -193,6 +193,11 @@ const EVENT_AUDIT_REPAIRED: Symbol = symbol_short!("aud_rep");
 /// Current schema for `EVENT_INDEXED_V2` topics.
 const INDEXER_EVENT_SCHEMA_VERSION: u32 = 2;
 
+const EVENT_CONC_LIMIT_SET: Symbol = symbol_short!("conc_lim");
+const EVENT_ROUNDING_MODE_SET: Symbol = symbol_short!("rnd_mode");
+const EVENT_MULTISIG_INIT: Symbol = symbol_short!("msig_init");
+const EVENT_ADMIN_SET: Symbol = symbol_short!("admin_set");
+const EVENT_PLATFORM_FEE_SET: Symbol = symbol_short!("fee_set");
 const BPS_DENOMINATOR: i128 = 10_000;
 
 /// Represents a revenue-share offering registered on-chain.
@@ -1114,8 +1119,9 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
         if env.storage().persistent().has(&DataKey::Admin) {
             return; // Already initialized, no-op
         }
-        env.storage().persistent().set(&DataKey::Admin, &admin.clone());
-        if let Some(s) = safety.clone() {
+        env.storage().persistent().set(&DataKey::Admin, &admin);
+        env.events().publish((EVENT_ADMIN_SET,), admin.clone());
+        if let Some(ref s) = safety {
             env.storage().persistent().set(&DataKey::Safety, &s);
         }
         env.storage().persistent().set(&DataKey::Paused, &false);
@@ -2318,6 +2324,7 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
             issuer.require_auth();
             let key = DataKey::ConcentrationLimit(offering_id);
             env.storage().persistent().set(&key, &ConcentrationLimitConfig { max_bps, enforce });
+            env.events().publish((EVENT_CONC_LIMIT_SET, issuer, namespace, token), (max_bps, enforce));
         }
         Ok(())
     }
@@ -2456,6 +2463,7 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
         issuer.require_auth();
         let key = DataKey::RoundingMode(offering_id);
         env.storage().persistent().set(&key, &mode);
+            env.events().publish((EVENT_ROUNDING_MODE_SET, issuer, namespace, token), mode);
         Ok(())
     }
 
@@ -4181,8 +4189,9 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
             return Err(RevoraError::LimitReached); // Improper threshold
         }
         env.storage().persistent().set(&DataKey::MultisigThreshold, &threshold);
-        env.storage().persistent().set(&DataKey::MultisigOwners, &owners);
+        env.storage().persistent().set(&DataKey::MultisigOwners, &owners.clone());
         env.storage().persistent().set(&DataKey::MultisigProposalCount, &0_u32);
+        env.events().publish((EVENT_MULTISIG_INIT,), (owners, threshold));
         Ok(())
     }
 
@@ -5052,6 +5061,7 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
         }
 
         env.storage().persistent().set(&DataKey::PlatformFeeBps, &fee_bps);
+        env.events().publish((EVENT_PLATFORM_FEE_SET,), fee_bps);
         Ok(())
     }
 
