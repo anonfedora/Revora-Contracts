@@ -15,6 +15,14 @@ fn setup(env: &Env) -> (RevoraVestingClient, Address, Address, Address) {
     (client, admin, beneficiary, token_id)
 }
 
+fn mint_tokens(env: &Env, payment_token: &Address, recipient: &Address, amount: &i128) {
+    soroban_sdk::token::StellarAssetClient::new(env, payment_token).mint(recipient, amount);
+}
+
+fn balance(env: &Env, payment_token: &Address, who: &Address) -> i128 {
+    soroban_sdk::token::Client::new(env, payment_token).balance(who)
+}
+
 #[test]
 fn initialize_sets_admin() {
     let env = Env::default();
