@@ -484,6 +484,229 @@ const MAX_CLAIM_PERIODS: u32 = 50;
 /// This is a safety cap to prevent accidental long-running loops in read-only methods.
 const MAX_CHUNK_PERIODS: u32 = 200;
 
+// ── Negative Amount Validation Matrix (#163) ───────────────────
+
+/// Categories of amount validation contexts in the contract.
+/// Each category has specific rules for what constitutes a valid amount.
+#[contracttype]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AmountValidationCategory {
+    /// Revenue deposit: amount must be strictly positive (> 0).
+    /// Reason: Depositing zero or negative tokens has no economic meaning.
+    RevenueDeposit,
+    /// Revenue report: amount can be zero but not negative (>= 0).
+    /// Reason: Zero revenue is valid (no distribution triggered); negative is impossible.
+    RevenueReport,
+    /// Holder share allocation: amount can be zero but not negative (>= 0).
+    /// Reason: Zero share means no allocation; negative share is invalid.
+    HolderShare,
+    /// Minimum revenue threshold: must be non-negative (>= 0).
+    /// Reason: Threshold of zero means no minimum; negative threshold is nonsensical.
+    MinRevenueThreshold,
+    /// Supply cap configuration: must be non-negative (>= 0).
+    /// Reason: Zero cap means unlimited; negative cap is invalid.
+    SupplyCap,
+    /// Investment constraints (min_stake): must be non-negative (>= 0).
+    /// Reason: Minimum stake cannot be negative.
+    InvestmentMinStake,
+    /// Investment constraints (max_stake): must be non-negative (>= 0) and >= min_stake.
+    /// Reason: Maximum stake must be valid range; zero means unlimited.
+    InvestmentMaxStake,
+    /// Snapshot reference: must be positive (> 0) and strictly increasing.
+    /// Reason: Zero is invalid; must be strictly monotonic.
+    SnapshotReference,
+    /// Period ID: unsigned, but some contexts require > 0.
+    /// Reason: Period 0 may be ambiguous in some business logic.
+    PeriodId,
+    /// Generic distribution simulation: any i128 is valid (can be negative for modeling).
+    /// Reason: Simulation-only, no state mutation.
+    Simulation,
+}
+
+/// Result of amount validation with detailed classification.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AmountValidationResult {
+    /// The original amount that was validated.
+    pub amount: i128,
+    /// The category of validation applied.
+    pub category: AmountValidationCategory,
+    /// Whether the amount passed validation.
+    pub is_valid: bool,
+    /// Specific error code if validation failed.
+    pub error_code: Option<u32>,
+    /// Human-readable description of why validation passed/failed.
+    pub reason: Symbol,
+}
+
+impl AmountValidationResult {
+    fn new(
+        amount: i128,
+        category: AmountValidationCategory,
+        is_valid: bool,
+        error_code: Option<u32>,
+        reason: Symbol,
+    ) -> Self {
+        Self { amount, category, is_valid, error_code, reason }
+    }
+}
+
+/// Event symbol emitted when amount validation fails.
+const EVENT_AMOUNT_VALIDATION_FAILED: Symbol = symbol_short!("amt_valid");
+
+/// Centralized amount validation matrix for all contract operations.
+///
+/// This matrix defines deterministic validation rules for amounts across different
+/// contract contexts, ensuring consistent handling of edge cases like zero and
+/// negative values. The matrix is stateless and pure - it only validates,
+/// it does not modify storage.
+pub struct AmountValidationMatrix;
+
+impl AmountValidationMatrix {
+    /// Validate an amount against the specified category's rules.
+    ///
+    /// # Arguments
+    /// * `amount` - The i128 amount to validate
+    /// * `category` - The validation context/category
+    ///
+    /// # Returns
+    /// * `Ok(())` if validation passes
+    /// * `Err((RevoraError, Symbol))` with specific error and reason if validation fails
+    ///
+    /// # Security Properties
+    /// - All negative amounts are rejected in deposit contexts
+    /// - Zero is allowed where semantically meaningful (reports, shares)
+    /// - Overflow-protected comparisons via saturating arithmetic where needed
+    pub fn validate(
+        amount: i128,
+        category: AmountValidationCategory,
+    ) -> Result<(), (RevoraError, Symbol)> {
+        match category {
+            AmountValidationCategory::RevenueDeposit => {
+                if amount <= 0 {
+                    return Err((RevoraError::InvalidAmount, symbol_short!("must_pos")));
+                }
+            }
+            AmountValidationCategory::RevenueReport => {
+                if amount < 0 {
+                    return Err((RevoraError::InvalidAmount, symbol_short!("no_neg")));
+                }
+            }
+            AmountValidationCategory::HolderShare => {
+                if amount < 0 {
+                    return Err((RevoraError::InvalidAmount, symbol_short!("no_neg")));
+                }
+            }
+            AmountValidationCategory::MinRevenueThreshold => {
+                if amount < 0 {
+                    return Err((RevoraError::InvalidAmount, symbol_short!("no_neg")));
+                }
+            }
+            AmountValidationCategory::SupplyCap => {
+                if amount < 0 {
+                    return Err((RevoraError::InvalidAmount, symbol_short!("no_neg")));
+                }
+            }
+            AmountValidationCategory::InvestmentMinStake => {
+                if amount < 0 {
+                    return Err((RevoraError::InvalidAmount, symbol_short!("no_neg")));
+                }
+            }
+            AmountValidationCategory::InvestmentMaxStake => {
+                if amount < 0 {
+                    return Err((RevoraError::InvalidAmount, symbol_short!("no_neg")));
+                }
+            }
+            AmountValidationCategory::SnapshotReference => {
+                if amount <= 0 {
+                    return Err((RevoraError::InvalidAmount, symbol_short!("snap_pos")));
+                }
+            }
+            AmountValidationCategory::PeriodId => {
+                if amount < 0 {
+                    return Err((RevoraError::InvalidPeriodId, symbol_short!("no_neg")));
+                }
+            }
+            AmountValidationCategory::Simulation => {}
+        }
+        Ok(())
+    }
+
+    /// Validate that max_stake >= min_stake when both are provided.
+    ///
+    /// # Arguments
+    /// * `min_stake` - The minimum stake value
+    /// * `max_stake` - The maximum stake value
+    ///
+    /// # Returns
+    /// * `Ok(())` if min <= max
+    /// * `Err(RevoraError::InvalidAmount)` if min > max
+    pub fn validate_stake_range(min_stake: i128, max_stake: i128) -> Result<(), RevoraError> {
+        if max_stake > 0 && min_stake > max_stake {
+            return Err(RevoraError::InvalidAmount);
+        }
+        Ok(())
+    }
+
+    /// Validate that snapshot reference is strictly increasing.
+    ///
+    /// # Arguments
+    /// * `new_ref` - The new snapshot reference
+    /// * `last_ref` - The last recorded snapshot reference
+    ///
+    /// # Returns
+    /// * `Ok(())` if new_ref > last_ref
+    /// * `Err(RevoraError::OutdatedSnapshot)` if new_ref <= last_ref
+    pub fn validate_snapshot_monotonic(new_ref: i128, last_ref: i128) -> Result<(), RevoraError> {
+        if new_ref <= last_ref {
+            return Err(RevoraError::OutdatedSnapshot);
+        }
+        Ok(())
+    }
+
+    /// Get a detailed validation result for an amount.
+    ///
+    /// Unlike `validate()`, this always returns a result struct with full context.
+    pub fn validate_detailed(
+        amount: i128,
+        category: AmountValidationCategory,
+    ) -> AmountValidationResult {
+        let (is_valid, error_code, reason) = match Self::validate(amount, category) {
+            Ok(()) => (true, None, symbol_short!("valid")),
+            Err((err, reason)) => (false, Some(err as u32), reason),
+        };
+        AmountValidationResult::new(amount, category, is_valid, error_code, reason)
+    }
+
+    /// Batch validate multiple amounts against the same category.
+    ///
+    /// Returns the first failing index, or None if all pass.
+    pub fn validate_batch(amounts: &[i128], category: AmountValidationCategory) -> Option<usize> {
+        for (i, &amount) in amounts.iter().enumerate() {
+            if Self::validate(amount, category).is_err() {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Get the default validation category for a given function name (for testing/debugging).
+    ///
+    /// This is a best-effort mapping; some functions have multiple amount parameters
+    /// with different validation requirements.
+    pub fn category_for_function(fn_name: &str) -> Option<AmountValidationCategory> {
+        match fn_name {
+            "deposit_revenue" => Some(AmountValidationCategory::RevenueDeposit),
+            "report_revenue" => Some(AmountValidationCategory::RevenueReport),
+            "set_holder_share" => Some(AmountValidationCategory::HolderShare),
+            "set_min_revenue_threshold" => Some(AmountValidationCategory::MinRevenueThreshold),
+            "set_investment_constraints" => Some(AmountValidationCategory::InvestmentMinStake),
+            "simulate_distribution" => Some(AmountValidationCategory::Simulation),
+            _ => None,
+        }
+    }
+}
+
 // ── Contract ─────────────────────────────────────────────────
 #[contract]
 pub struct RevoraRevenueShare;
@@ -569,11 +792,8 @@ impl RevoraRevenueShare {
     ) -> Result<(), RevoraError> {
         Self::require_valid_meta_nonce_and_expiry(env, signer, nonce, expiry)?;
         let pk_key = MetaDataKey::SignerKey(signer.clone());
-        let public_key: BytesN<32> = env
-            .storage()
-            .persistent()
-            .get(&pk_key)
-            .ok_or(RevoraError::SignerKeyNotRegistered)?;
+        let public_key: BytesN<32> =
+            env.storage().persistent().get(&pk_key).ok_or(RevoraError::SignerKeyNotRegistered)?;
         let payload = MetaAuthorization {
             version: Self::META_AUTH_VERSION,
             contract: env.current_contract_address(),
@@ -606,13 +826,12 @@ impl RevoraRevenueShare {
         env.storage()
             .persistent()
             .set(&DataKey::HolderShare(offering_id, holder.clone()), &share_bps);
-        env.events()
-            .publish((EVENT_SHARE_SET, issuer, namespace, token), (holder, share_bps));
+        env.events().publish((EVENT_SHARE_SET, issuer, namespace, token), (holder, share_bps));
         Ok(())
     }
 
- 
     /// Internal helper for revenue deposits.
+    /// Validates amount using the Negative Amount Validation Matrix (#163).
     fn do_deposit_revenue(
         env: &Env,
         issuer: Address,
@@ -622,6 +841,17 @@ impl RevoraRevenueShare {
         amount: i128,
         period_id: u64,
     ) -> Result<(), RevoraError> {
+        // Negative Amount Validation Matrix: RevenueDeposit requires amount > 0 (#163)
+        if let Err((err, reason)) =
+            AmountValidationMatrix::validate(amount, AmountValidationCategory::RevenueDeposit)
+        {
+            env.events().publish(
+                (EVENT_AMOUNT_VALIDATION_FAILED, issuer.clone(), namespace.clone(), token.clone()),
+                (amount, err as u32, reason),
+            );
+            return Err(err);
+        }
+
         let offering_id = OfferingId {
             issuer: issuer.clone(),
             namespace: namespace.clone(),
@@ -728,14 +958,6 @@ impl RevoraRevenueShare {
     fn require_valid_period_id(period_id: u64) -> Result<(), RevoraError> {
         if period_id == 0 {
             return Err(RevoraError::InvalidPeriodId);
-        }
-        Ok(())
-    }
-
-    /// Input validation (#35): require amount >= 0 for reporting (allow zero revenue report).
-    fn require_non_negative_amount(amount: i128) -> Result<(), RevoraError> {
-        if amount < 0 {
-            return Err(RevoraError::InvalidAmount);
         }
         Ok(())
     }
@@ -883,6 +1105,7 @@ impl RevoraRevenueShare {
     /// In testnet mode, bps validation is skipped to allow flexible testing.
     ///
     /// Register a new offering. `supply_cap`: max cumulative deposited revenue for this offering; 0 = no cap (#96).
+    /// Validates supply_cap using the Negative Amount Validation Matrix (#163).
     pub fn register_offering(
         env: Env,
         issuer: Address,
@@ -895,6 +1118,13 @@ impl RevoraRevenueShare {
         Self::require_not_frozen(&env)?;
         Self::require_not_paused(&env);
         issuer.require_auth();
+
+        // Negative Amount Validation Matrix: SupplyCap requires >= 0 (#163)
+        if let Err((err, _)) =
+            AmountValidationMatrix::validate(supply_cap, AmountValidationCategory::SupplyCap)
+        {
+            return Err(err);
+        }
 
         // Skip bps validation in testnet mode
         let testnet_mode = Self::is_testnet_mode(env.clone());
@@ -1040,6 +1270,7 @@ impl RevoraRevenueShare {
     }
 
     /// Record a revenue report for an offering; updates audit summary and emits events.
+    /// Validates amount using the Negative Amount Validation Matrix (#163).
     #[allow(clippy::too_many_arguments)]
     pub fn report_revenue(
         env: Env,
@@ -1054,6 +1285,17 @@ impl RevoraRevenueShare {
         Self::require_not_frozen(&env)?;
         Self::require_not_paused(&env);
         issuer.require_auth();
+
+        // Negative Amount Validation Matrix: RevenueReport requires amount >= 0 (#163)
+        if let Err((err, reason)) =
+            AmountValidationMatrix::validate(amount, AmountValidationCategory::RevenueReport)
+        {
+            env.events().publish(
+                (EVENT_AMOUNT_VALIDATION_FAILED, issuer.clone(), namespace.clone(), token.clone()),
+                (amount, err as u32, reason),
+            );
+            return Err(err);
+        }
 
         let event_only = Self::is_event_only(&env);
         let offering_id = OfferingId {
@@ -1922,6 +2164,7 @@ impl RevoraRevenueShare {
     // ── Per-offering investment constraints (#97) ─────────────
 
     /// Set min and max stake per investor for an offering. Issuer/admin only. Constraints are read by off-chain systems for enforcement.
+    /// Validates amounts using the Negative Amount Validation Matrix (#163).
     pub fn set_investment_constraints(
         env: Env,
         issuer: Address,
@@ -1943,12 +2186,26 @@ impl RevoraRevenueShare {
             return Err(RevoraError::OfferingNotFound);
         }
         issuer.require_auth();
-        if min_stake < 0 || max_stake < 0 {
-            return Err(RevoraError::InvalidAmount);
+
+        // Negative Amount Validation Matrix: InvestmentMinStake requires >= 0 (#163)
+        if let Err((err, _)) = AmountValidationMatrix::validate(
+            min_stake,
+            AmountValidationCategory::InvestmentMinStake,
+        ) {
+            return Err(err);
         }
-        if max_stake > 0 && min_stake > max_stake {
-            return Err(RevoraError::InvalidAmount);
+
+        // Negative Amount Validation Matrix: InvestmentMaxStake requires >= 0 (#163)
+        if let Err((err, _)) = AmountValidationMatrix::validate(
+            max_stake,
+            AmountValidationCategory::InvestmentMaxStake,
+        ) {
+            return Err(err);
         }
+
+        // Validate range: max_stake >= min_stake when max_stake > 0
+        AmountValidationMatrix::validate_stake_range(min_stake, max_stake)?;
+
         let key = DataKey::InvestmentConstraints(offering_id);
         let previous = env.storage().persistent().get::<DataKey, InvestmentConstraintsConfig>(&key);
         env.storage().persistent().set(&key, &InvestmentConstraintsConfig { min_stake, max_stake });
@@ -1976,6 +2233,7 @@ impl RevoraRevenueShare {
     /// Set minimum revenue per period below which no distribution is triggered.
     /// Only the offering issuer may set this. Emits event when configured or changed.
     /// Pass 0 to disable the threshold.
+    /// Validates amount using the Negative Amount Validation Matrix (#163).
     pub fn set_min_revenue_threshold(
         env: Env,
         issuer: Address,
@@ -2000,7 +2258,13 @@ impl RevoraRevenueShare {
 
         issuer.require_auth();
 
-        Self::require_non_negative_amount(min_amount)?;
+        // Negative Amount Validation Matrix: MinRevenueThreshold requires >= 0 (#163)
+        if let Err((err, _)) = AmountValidationMatrix::validate(
+            min_amount,
+            AmountValidationCategory::MinRevenueThreshold,
+        ) {
+            return Err(err);
+        }
 
         let key = DataKey::MinRevenueThreshold(offering_id);
         let previous: i128 = env.storage().persistent().get(&key).unwrap_or(0);
@@ -2098,6 +2362,7 @@ impl RevoraRevenueShare {
     }
 
     /// any previously recorded snapshot for this offering to prevent duplication.
+    /// Validates amount and snapshot reference using the Negative Amount Validation Matrix (#163).
     #[allow(clippy::too_many_arguments)]
     pub fn deposit_revenue_with_snapshot(
         env: Env,
@@ -2112,6 +2377,15 @@ impl RevoraRevenueShare {
         Self::require_not_frozen(&env)?;
         issuer.require_auth();
 
+        // 0. Validate snapshot reference using Negative Amount Validation Matrix (#163)
+        // SnapshotReference requires > 0 and strictly increasing
+        if let Err((err, _)) = AmountValidationMatrix::validate(
+            snapshot_reference as i128,
+            AmountValidationCategory::SnapshotReference,
+        ) {
+            return Err(err);
+        }
+
         // 1. Verify snapshots are enabled
         if !Self::get_snapshot_config(env.clone(), issuer.clone(), namespace.clone(), token.clone())
         {
@@ -2124,14 +2398,15 @@ impl RevoraRevenueShare {
             token: token.clone(),
         };
 
-        // 2. Validate snapshot reference (must be strictly monotonic)
+        // 2. Validate snapshot reference is strictly monotonic using matrix helper
         let snap_key = DataKey::LastSnapshotRef(offering_id.clone());
         let last_snap: u64 = env.storage().persistent().get(&snap_key).unwrap_or(0);
-        if snapshot_reference <= last_snap {
-            return Err(RevoraError::OutdatedSnapshot);
-        }
+        AmountValidationMatrix::validate_snapshot_monotonic(
+            snapshot_reference as i128,
+            last_snap as i128,
+        )?;
 
-        // 3. Delegate to core deposit logic
+        // 3. Delegate to core deposit logic (includes RevenueDeposit validation)
         Self::do_deposit_revenue(
             &env,
             issuer.clone(),
@@ -2242,7 +2517,14 @@ impl RevoraRevenueShare {
         }
 
         issuer.require_auth();
-        Self::set_holder_share_internal(&env, offering_id.issuer, offering_id.namespace, offering_id.token, holder, share_bps)
+        Self::set_holder_share_internal(
+            &env,
+            offering_id.issuer,
+            offering_id.namespace,
+            offering_id.token,
+            holder,
+            share_bps,
+        )
     }
 
     /// Register an ed25519 public key for a signer address.
@@ -2253,11 +2535,8 @@ impl RevoraRevenueShare {
         public_key: BytesN<32>,
     ) -> Result<(), RevoraError> {
         signer.require_auth();
-        env.storage()
-            .persistent()
-            .set(&MetaDataKey::SignerKey(signer.clone()), &public_key);
-        env.events()
-            .publish((EVENT_META_SIGNER_SET, signer), public_key);
+        env.storage().persistent().set(&MetaDataKey::SignerKey(signer.clone()), &public_key);
+        env.events().publish((EVENT_META_SIGNER_SET, signer), public_key);
         Ok(())
     }
 
@@ -2271,13 +2550,9 @@ impl RevoraRevenueShare {
         delegate: Address,
     ) -> Result<(), RevoraError> {
         Self::require_not_frozen(&env)?;
-        let current_issuer = Self::get_current_issuer(
-            &env,
-            issuer.clone(),
-            namespace.clone(),
-            token.clone(),
-        )
-        .ok_or(RevoraError::OfferingNotFound)?;
+        let current_issuer =
+            Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
+                .ok_or(RevoraError::OfferingNotFound)?;
         if current_issuer != issuer {
             return Err(RevoraError::OfferingNotFound);
         }
@@ -2287,11 +2562,8 @@ impl RevoraRevenueShare {
             namespace: namespace.clone(),
             token: token.clone(),
         };
-        env.storage()
-            .persistent()
-            .set(&MetaDataKey::Delegate(offering_id), &delegate);
-        env.events()
-            .publish((EVENT_META_DELEGATE_SET, issuer, namespace, token), delegate);
+        env.storage().persistent().set(&MetaDataKey::Delegate(offering_id), &delegate);
+        env.events().publish((EVENT_META_DELEGATE_SET, issuer, namespace, token), delegate);
         Ok(())
     }
 
@@ -2302,14 +2574,8 @@ impl RevoraRevenueShare {
         namespace: Symbol,
         token: Address,
     ) -> Option<Address> {
-        let offering_id = OfferingId {
-            issuer,
-            namespace,
-            token,
-        };
-        env.storage()
-            .persistent()
-            .get(&MetaDataKey::Delegate(offering_id))
+        let offering_id = OfferingId { issuer, namespace, token };
+        env.storage().persistent().get(&MetaDataKey::Delegate(offering_id))
     }
 
     /// Meta-transaction variant of `set_holder_share`.
@@ -2360,12 +2626,7 @@ impl RevoraRevenueShare {
         )?;
         Self::mark_meta_nonce_used(&env, &signer, nonce);
         env.events().publish(
-            (
-                EVENT_META_SHARE_SET,
-                payload.issuer,
-                payload.namespace,
-                payload.token,
-            ),
+            (EVENT_META_SHARE_SET, payload.issuer, payload.namespace, payload.token),
             (signer, payload.holder, payload.share_bps, nonce, expiry),
         );
         Ok(())
@@ -2411,18 +2672,10 @@ impl RevoraRevenueShare {
         Self::verify_meta_signature(&env, &signer, nonce, expiry, action, &signature)?;
         env.storage()
             .persistent()
-            .set(
-                &MetaDataKey::RevenueApproved(offering_id, payload.period_id),
-                &true,
-            );
+            .set(&MetaDataKey::RevenueApproved(offering_id, payload.period_id), &true);
         Self::mark_meta_nonce_used(&env, &signer, nonce);
         env.events().publish(
-            (
-                EVENT_META_REV_APPROVE,
-                payload.issuer,
-                payload.namespace,
-                payload.token,
-            ),
+            (EVENT_META_REV_APPROVE, payload.issuer, payload.namespace, payload.token),
             (
                 signer,
                 payload.payout_asset,
@@ -2596,30 +2849,21 @@ impl RevoraRevenueShare {
         end_timestamp: u64,
     ) -> Result<(), RevoraError> {
         Self::require_not_frozen(&env)?;
-        let current_issuer = Self::get_current_issuer(
-            &env,
-            issuer.clone(),
-            namespace.clone(),
-            token.clone(),
-        )
-        .ok_or(RevoraError::OfferingNotFound)?;
+        let current_issuer =
+            Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
+                .ok_or(RevoraError::OfferingNotFound)?;
         if current_issuer != issuer {
             return Err(RevoraError::OfferingNotFound);
         }
         issuer.require_auth();
-        let window = AccessWindow {
-            start_timestamp,
-            end_timestamp,
-        };
+        let window = AccessWindow { start_timestamp, end_timestamp };
         Self::validate_window(&window)?;
         let offering_id = OfferingId {
             issuer: issuer.clone(),
             namespace: namespace.clone(),
             token: token.clone(),
         };
-        env.storage()
-            .persistent()
-            .set(&WindowDataKey::Report(offering_id), &window);
+        env.storage().persistent().set(&WindowDataKey::Report(offering_id), &window);
         env.events().publish(
             (EVENT_REPORT_WINDOW_SET, issuer, namespace, token),
             (start_timestamp, end_timestamp),
@@ -2638,30 +2882,21 @@ impl RevoraRevenueShare {
         end_timestamp: u64,
     ) -> Result<(), RevoraError> {
         Self::require_not_frozen(&env)?;
-        let current_issuer = Self::get_current_issuer(
-            &env,
-            issuer.clone(),
-            namespace.clone(),
-            token.clone(),
-        )
-        .ok_or(RevoraError::OfferingNotFound)?;
+        let current_issuer =
+            Self::get_current_issuer(&env, issuer.clone(), namespace.clone(), token.clone())
+                .ok_or(RevoraError::OfferingNotFound)?;
         if current_issuer != issuer {
             return Err(RevoraError::OfferingNotFound);
         }
         issuer.require_auth();
-        let window = AccessWindow {
-            start_timestamp,
-            end_timestamp,
-        };
+        let window = AccessWindow { start_timestamp, end_timestamp };
         Self::validate_window(&window)?;
         let offering_id = OfferingId {
             issuer: issuer.clone(),
             namespace: namespace.clone(),
             token: token.clone(),
         };
-        env.storage()
-            .persistent()
-            .set(&WindowDataKey::Claim(offering_id), &window);
+        env.storage().persistent().set(&WindowDataKey::Claim(offering_id), &window);
         env.events().publish(
             (EVENT_CLAIM_WINDOW_SET, issuer, namespace, token),
             (start_timestamp, end_timestamp),
@@ -2676,14 +2911,8 @@ impl RevoraRevenueShare {
         namespace: Symbol,
         token: Address,
     ) -> Option<AccessWindow> {
-        let offering_id = OfferingId {
-            issuer,
-            namespace,
-            token,
-        };
-        env.storage()
-            .persistent()
-            .get(&WindowDataKey::Report(offering_id))
+        let offering_id = OfferingId { issuer, namespace, token };
+        env.storage().persistent().get(&WindowDataKey::Report(offering_id))
     }
 
     /// Read configured claiming window (if any) for an offering.
@@ -2693,14 +2922,8 @@ impl RevoraRevenueShare {
         namespace: Symbol,
         token: Address,
     ) -> Option<AccessWindow> {
-        let offering_id = OfferingId {
-            issuer,
-            namespace,
-            token,
-        };
-        env.storage()
-            .persistent()
-            .get(&WindowDataKey::Claim(offering_id))
+        let offering_id = OfferingId { issuer, namespace, token };
+        env.storage().persistent().get(&WindowDataKey::Claim(offering_id))
     }
 
     /// Return unclaimed period IDs for a holder on an offering.
@@ -3993,8 +4216,13 @@ mod vesting_test;
 #[cfg(test)]
 mod test_utils;
 
+#[cfg(test)]
 mod chunking_tests;
+#[cfg(test)]
 mod test;
+#[cfg(test)]
 mod test_auth;
+#[cfg(test)]
 mod test_cross_contract;
+#[cfg(test)]
 mod test_namespaces;

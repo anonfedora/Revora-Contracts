@@ -3,7 +3,8 @@
 #![allow(unused_variables, dead_code, unused_imports)]
 
 use crate::{
-    ProposalAction, RevoraError, RevoraRevenueShare, RevoraRevenueShareClient, RoundingMode,
+    AmountValidationCategory, AmountValidationMatrix, ProposalAction, RevoraError,
+    RevoraRevenueShare, RevoraRevenueShareClient, RoundingMode,
 };
 use soroban_sdk::{
     symbol_short,
@@ -6985,44 +6986,76 @@ mod regression {
         assert!(env.events().all().len() > before);
     }
 
-#[test]
-fn report_below_threshold_emits_event_and_skips_distribution() {
-    let (env, client, issuer, token, payout_asset) = setup_with_offering();
-    client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &10_000);
-    let events_before = env.events().all().len();
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &1_000, &1, &false);
-    let events_after = env.events().all().len();
-    assert!(events_after > events_before, "should emit rev_below event");
-    let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
-    assert!(
-        summary.is_none() || summary.as_ref().clone().unwrap().report_count == 0,
-        "below-threshold report must not count toward audit"
-    );
-}
+    #[test]
+    fn report_below_threshold_emits_event_and_skips_distribution() {
+        let (env, client, issuer, token, payout_asset) = setup_with_offering();
+        client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &10_000);
+        let events_before = env.events().all().len();
+        client.report_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &payout_asset,
+            &1_000,
+            &1,
+            &false,
+        );
+        let events_after = env.events().all().len();
+        assert!(events_after > events_before, "should emit rev_below event");
+        let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
+        assert!(
+            summary.is_none() || summary.as_ref().clone().unwrap().report_count == 0,
+            "below-threshold report must not count toward audit"
+        );
+    }
 
-#[test]
-fn report_at_or_above_threshold_updates_state() {
-    let (_env, client, issuer, token, payout_asset) = setup_with_offering();
-    client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &1_000);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &1_000, &1, &false);
-    let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
-    assert_eq!(summary.clone().unwrap().report_count, 1);
-    assert_eq!(summary.clone().unwrap().total_revenue, 1_000);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &2_000, &2, &false);
-    let summary2 = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
-    assert_eq!(summary2.report_count, 2);
-    assert_eq!(summary2.total_revenue, 3_000);
-}
+    #[test]
+    fn report_at_or_above_threshold_updates_state() {
+        let (_env, client, issuer, token, payout_asset) = setup_with_offering();
+        client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &1_000);
+        client.report_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &payout_asset,
+            &1_000,
+            &1,
+            &false,
+        );
+        let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
+        assert_eq!(summary.clone().unwrap().report_count, 1);
+        assert_eq!(summary.clone().unwrap().total_revenue, 1_000);
+        client.report_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &payout_asset,
+            &2_000,
+            &2,
+            &false,
+        );
+        let summary2 = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
+        assert_eq!(summary2.report_count, 2);
+        assert_eq!(summary2.total_revenue, 3_000);
+    }
 
-#[test]
-fn zero_threshold_disables_check() {
-    let (_env, client, issuer, token, payout_asset) = setup_with_offering();
-    client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &100);
-    client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &0);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &50, &1, &false);
-    let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
-    assert_eq!(summary.clone().unwrap().report_count, 1);
-}
+    #[test]
+    fn zero_threshold_disables_check() {
+        let (_env, client, issuer, token, payout_asset) = setup_with_offering();
+        client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &100);
+        client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &0);
+        client.report_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &payout_asset,
+            &50,
+            &1,
+            &false,
+        );
+        let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
+        assert_eq!(summary.clone().unwrap().report_count, 1);
+    }
     #[test]
     fn report_below_threshold_emits_event_and_skips_distribution() {
         let (env, client, issuer, token, payout_asset) = setup_with_offering();
@@ -7108,28 +7141,28 @@ fn zero_threshold_disables_check() {
     // Deterministic ordering for query results (#38)
     // ---------------------------------------------------------------------------
 
-#[test]
-fn get_offerings_page_order_is_by_registration_index() {
-    let (env, client, issuer) = setup();
-    let t0 = Address::generate(&env);
-    let t1 = Address::generate(&env);
-    let t2 = Address::generate(&env);
-    let t3 = Address::generate(&env);
-    let p0 = Address::generate(&env);
-    let p1 = Address::generate(&env);
-    let p2 = Address::generate(&env);
-    let p3 = Address::generate(&env);
-    client.register_offering(&issuer, &symbol_short!("def"), &t0, &100, &p0, &0);
-    client.register_offering(&issuer, &symbol_short!("def"), &t1, &200, &p1, &0);
-    client.register_offering(&issuer, &symbol_short!("def"), &t2, &300, &p2, &0);
-    client.register_offering(&issuer, &symbol_short!("def"), &t3, &400, &p3, &0);
-    let (page, _) = client.get_offerings_page(&issuer, &symbol_short!("def"), &0, &10);
-    assert_eq!(page.len(), 4);
-    assert_eq!(page.get(0).clone().unwrap().token, t0);
-    assert_eq!(page.get(1).clone().unwrap().token, t1);
-    assert_eq!(page.get(2).clone().unwrap().token, t2);
-    assert_eq!(page.get(3).clone().unwrap().token, t3);
-}
+    #[test]
+    fn get_offerings_page_order_is_by_registration_index() {
+        let (env, client, issuer) = setup();
+        let t0 = Address::generate(&env);
+        let t1 = Address::generate(&env);
+        let t2 = Address::generate(&env);
+        let t3 = Address::generate(&env);
+        let p0 = Address::generate(&env);
+        let p1 = Address::generate(&env);
+        let p2 = Address::generate(&env);
+        let p3 = Address::generate(&env);
+        client.register_offering(&issuer, &symbol_short!("def"), &t0, &100, &p0, &0);
+        client.register_offering(&issuer, &symbol_short!("def"), &t1, &200, &p1, &0);
+        client.register_offering(&issuer, &symbol_short!("def"), &t2, &300, &p2, &0);
+        client.register_offering(&issuer, &symbol_short!("def"), &t3, &400, &p3, &0);
+        let (page, _) = client.get_offerings_page(&issuer, &symbol_short!("def"), &0, &10);
+        assert_eq!(page.len(), 4);
+        assert_eq!(page.get(0).clone().unwrap().token, t0);
+        assert_eq!(page.get(1).clone().unwrap().token, t1);
+        assert_eq!(page.get(2).clone().unwrap().token, t2);
+        assert_eq!(page.get(3).clone().unwrap().token, t3);
+    }
     #[test]
     fn get_offerings_page_order_is_by_registration_index() {
         let (env, client, issuer) = setup();
@@ -7982,7 +8015,15 @@ mod scenarios {
         // 2. Report revenue for period 1
         // total_revenue = 1,000,000
         // distributable = 1,000,000 * 50% = 500,000
-        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &1_000_000, &1, &false);
+        client.report_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &payout_asset,
+            &1_000_000,
+            &1,
+            &false,
+        );
 
         // 3. Investors set their shares for period 1 (Total supply 100)
         client.set_holder_share(&issuer, &symbol_short!("def"), &token, &1, &investor_a, &60); // 60%
@@ -7991,7 +8032,15 @@ mod scenarios {
         // 4. Report revenue for period 2
         // total_revenue = 2,000,000
         // distributable = 2,000,000 * 50% = 1,000,000
-        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &2_000_000, &2, &false);
+        client.report_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &payout_asset,
+            &2_000_000,
+            &2,
+            &false,
+        );
 
         // 5. Investors' shares shift for period 2
         client.set_holder_share(&issuer, &symbol_short!("def"), &token, &2, &investor_a, &20); // 20%
@@ -8016,9 +8065,11 @@ mod scenarios {
         assert_eq!(payout_b, 1_000_000);
 
         // Verify no pending claims
-        let remaining_a = client.get_unclaimed_periods(&issuer, &symbol_short!("def"), &token, &investor_a);
+        let remaining_a =
+            client.get_unclaimed_periods(&issuer, &symbol_short!("def"), &token, &investor_a);
         assert!(remaining_a.is_empty());
-        let claimable_b_after = client.get_claimable(&issuer, &symbol_short!("def"), &token, &investor_b);
+        let claimable_b_after =
+            client.get_claimable(&issuer, &symbol_short!("def"), &token, &investor_b);
         assert_eq!(claimable_b_after, 0);
 
         // Verify aggregation totals
@@ -8039,14 +8090,37 @@ mod scenarios {
         let investor = Address::generate(&env);
 
         // 1. Offering registered with 100% revenue share and a time delay (86400 secs)
-        client.register_offering(&issuer, &symbol_short!("def"), &token, &10_000, &payout_asset, &86400);
+        client.register_offering(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &10_000,
+            &payout_asset,
+            &86400,
+        );
 
         // 2. Issuer attempts to report negative revenue (validation should reject)
-        let res = client.try_report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &-500, &1, &false);
+        let res = client.try_report_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &payout_asset,
+            &-500,
+            &1,
+            &false,
+        );
         assert!(res.is_err());
 
         // 3. Issuer successfully reports valid revenue for period 1
-        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &100_000, &1, &false);
+        client.report_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &payout_asset,
+            &100_000,
+            &1,
+            &false,
+        );
 
         // 4. Investor is assigned 100% share for period 1
         client.set_holder_share(&issuer, &symbol_short!("def"), &token, &1, &investor, &100);
@@ -8061,12 +8135,24 @@ mod scenarios {
         env.ledger().set_timestamp(env.ledger().timestamp() + 2 * 86400);
 
         // 7. Issuer corrects the revenue report for period 1 via override (changes to 50_000)
-        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &50_000, &1, &true);
+        client.report_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &payout_asset,
+            &50_000,
+            &1,
+            &true,
+        );
 
         // 8. Investor successfully claims after delay and override
-        let claim_preview_after = client.get_claimable(&issuer, &symbol_short!("def"), &token, &investor);
-        assert_eq!(claim_preview_after, 50_000, "Preview should reflect overridden amount and passed delay");
-        
+        let claim_preview_after =
+            client.get_claimable(&issuer, &symbol_short!("def"), &token, &investor);
+        assert_eq!(
+            claim_preview_after, 50_000,
+            "Preview should reflect overridden amount and passed delay"
+        );
+
         let payout = client.claim(&issuer, &symbol_short!("def"), &token, &investor, &0);
         assert_eq!(payout, 50_000);
 
@@ -8074,14 +8160,1053 @@ mod scenarios {
         client.blacklist_add(&issuer, &issuer, &symbol_short!("def"), &token, &investor);
 
         // 10. Issuer reports revenue for period 2
-        client.report_revenue(&issuer, &symbol_short!("def"), &token, &payout_asset, &200_000, &2, &false);
+        client.report_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &payout_asset,
+            &200_000,
+            &2,
+            &false,
+        );
         client.set_holder_share(&issuer, &symbol_short!("def"), &token, &2, &investor, &100);
 
         // 11. Investor attempts claim but is blocked by blacklist
         env.ledger().set_timestamp(env.ledger().timestamp() + 2 * 86400); // pass delay
-        let claim_res_blocked = client.try_claim(&issuer, &symbol_short!("def"), &token, &investor, &0);
+        let claim_res_blocked =
+            client.try_claim(&issuer, &symbol_short!("def"), &token, &investor, &0);
         assert!(claim_res_blocked.is_err(), "Claim should fail due to blacklist");
     }
 }
-} // mod regression
 
+// ── Negative Amount Validation Matrix Tests (#163) ─────────────────────────────────────
+
+mod negative_amount_validation_matrix {
+    use crate::{
+        AmountValidationCategory, AmountValidationMatrix, RevoraError, RevoraRevenueShareClient,
+    };
+    use soroban_sdk::{
+        symbol_short,
+        testutils::{Address as _, Events as _, Ledger as _},
+        vec, Address, Env,
+    };
+
+    fn make_client(env: &Env) -> RevoraRevenueShareClient<'_> {
+        let id = env.register_contract(None, crate::RevoraRevenueShare);
+        RevoraRevenueShareClient::new(env, &id)
+    }
+
+    // ── RevenueDeposit validation ──────────────────────────────────
+
+    #[test]
+    fn revenue_deposit_positive_amount_accepted() {
+        let env = Env::default();
+        let client = make_client(&env);
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+
+        let result =
+            AmountValidationMatrix::validate(1000, AmountValidationCategory::RevenueDeposit);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn revenue_deposit_zero_amount_rejected() {
+        let env = Env::default();
+        let client = make_client(&env);
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+
+        let result = AmountValidationMatrix::validate(0, AmountValidationCategory::RevenueDeposit);
+        assert!(result.is_err());
+        let (err, _) = result.unwrap_err();
+        assert_eq!(err, RevoraError::InvalidAmount);
+    }
+
+    #[test]
+    fn revenue_deposit_negative_amount_rejected() {
+        let env = Env::default();
+        let client = make_client(&env);
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+
+        let result =
+            AmountValidationMatrix::validate(-1000, AmountValidationCategory::RevenueDeposit);
+        assert!(result.is_err());
+        let (err, _) = result.unwrap_err();
+        assert_eq!(err, RevoraError::InvalidAmount);
+    }
+
+    #[test]
+    fn revenue_deposit_i128_max_accepted() {
+        let result =
+            AmountValidationMatrix::validate(i128::MAX, AmountValidationCategory::RevenueDeposit);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn revenue_deposit_i128_min_rejected() {
+        let result =
+            AmountValidationMatrix::validate(i128::MIN, AmountValidationCategory::RevenueDeposit);
+        assert!(result.is_err());
+    }
+
+    // ── RevenueReport validation ──────────────────────────────────
+
+    #[test]
+    fn revenue_report_positive_amount_accepted() {
+        let result =
+            AmountValidationMatrix::validate(1000, AmountValidationCategory::RevenueReport);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn revenue_report_zero_amount_accepted() {
+        let result = AmountValidationMatrix::validate(0, AmountValidationCategory::RevenueReport);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn revenue_report_negative_amount_rejected() {
+        let result = AmountValidationMatrix::validate(-1, AmountValidationCategory::RevenueReport);
+        assert!(result.is_err());
+        let (err, _) = result.unwrap_err();
+        assert_eq!(err, RevoraError::InvalidAmount);
+    }
+
+    #[test]
+    fn revenue_report_i128_min_rejected() {
+        let result =
+            AmountValidationMatrix::validate(i128::MIN, AmountValidationCategory::RevenueReport);
+        assert!(result.is_err());
+    }
+
+    // ── HolderShare validation ────────────────────────────────────
+
+    #[test]
+    fn holder_share_positive_amount_accepted() {
+        let result = AmountValidationMatrix::validate(1000, AmountValidationCategory::HolderShare);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn holder_share_zero_amount_accepted() {
+        let result = AmountValidationMatrix::validate(0, AmountValidationCategory::HolderShare);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn holder_share_negative_amount_rejected() {
+        let result = AmountValidationMatrix::validate(-500, AmountValidationCategory::HolderShare);
+        assert!(result.is_err());
+        let (err, _) = result.unwrap_err();
+        assert_eq!(err, RevoraError::InvalidAmount);
+    }
+
+    // ── MinRevenueThreshold validation ─────────────────────────────
+
+    #[test]
+    fn min_revenue_threshold_positive_accepted() {
+        let result =
+            AmountValidationMatrix::validate(1000, AmountValidationCategory::MinRevenueThreshold);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn min_revenue_threshold_zero_accepted() {
+        let result =
+            AmountValidationMatrix::validate(0, AmountValidationCategory::MinRevenueThreshold);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn min_revenue_threshold_negative_rejected() {
+        let result =
+            AmountValidationMatrix::validate(-100, AmountValidationCategory::MinRevenueThreshold);
+        assert!(result.is_err());
+        let (err, _) = result.unwrap_err();
+        assert_eq!(err, RevoraError::InvalidAmount);
+    }
+
+    // ── SupplyCap validation ───────────────────────────────────────
+
+    #[test]
+    fn supply_cap_positive_accepted() {
+        let result =
+            AmountValidationMatrix::validate(1_000_000, AmountValidationCategory::SupplyCap);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn supply_cap_zero_accepted() {
+        let result = AmountValidationMatrix::validate(0, AmountValidationCategory::SupplyCap);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn supply_cap_negative_rejected() {
+        let result = AmountValidationMatrix::validate(-50000, AmountValidationCategory::SupplyCap);
+        assert!(result.is_err());
+        let (err, _) = result.unwrap_err();
+        assert_eq!(err, RevoraError::InvalidAmount);
+    }
+
+    // ── InvestmentMinStake validation ─────────────────────────────
+
+    #[test]
+    fn investment_min_stake_positive_accepted() {
+        let result =
+            AmountValidationMatrix::validate(100, AmountValidationCategory::InvestmentMinStake);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn investment_min_stake_zero_accepted() {
+        let result =
+            AmountValidationMatrix::validate(0, AmountValidationCategory::InvestmentMinStake);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn investment_min_stake_negative_rejected() {
+        let result =
+            AmountValidationMatrix::validate(-10, AmountValidationCategory::InvestmentMinStake);
+        assert!(result.is_err());
+        let (err, _) = result.unwrap_err();
+        assert_eq!(err, RevoraError::InvalidAmount);
+    }
+
+    // ── InvestmentMaxStake validation ─────────────────────────────
+
+    #[test]
+    fn investment_max_stake_positive_accepted() {
+        let result =
+            AmountValidationMatrix::validate(10_000, AmountValidationCategory::InvestmentMaxStake);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn investment_max_stake_zero_accepted() {
+        let result =
+            AmountValidationMatrix::validate(0, AmountValidationCategory::InvestmentMaxStake);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn investment_max_stake_negative_rejected() {
+        let result =
+            AmountValidationMatrix::validate(-1, AmountValidationCategory::InvestmentMaxStake);
+        assert!(result.is_err());
+        let (err, _) = result.unwrap_err();
+        assert_eq!(err, RevoraError::InvalidAmount);
+    }
+
+    // ── SnapshotReference validation ──────────────────────────────
+
+    #[test]
+    fn snapshot_reference_positive_accepted() {
+        let result =
+            AmountValidationMatrix::validate(100, AmountValidationCategory::SnapshotReference);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn snapshot_reference_zero_rejected() {
+        let result =
+            AmountValidationMatrix::validate(0, AmountValidationCategory::SnapshotReference);
+        assert!(result.is_err());
+        let (err, _) = result.unwrap_err();
+        assert_eq!(err, RevoraError::InvalidAmount);
+    }
+
+    #[test]
+    fn snapshot_reference_negative_rejected() {
+        let result =
+            AmountValidationMatrix::validate(-1, AmountValidationCategory::SnapshotReference);
+        assert!(result.is_err());
+        let (err, _) = result.unwrap_err();
+        assert_eq!(err, RevoraError::InvalidAmount);
+    }
+
+    // ── PeriodId validation ───────────────────────────────────────
+
+    #[test]
+    fn period_id_positive_accepted() {
+        let result = AmountValidationMatrix::validate(1, AmountValidationCategory::PeriodId);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn period_id_zero_accepted() {
+        let result = AmountValidationMatrix::validate(0, AmountValidationCategory::PeriodId);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn period_id_negative_rejected() {
+        let result = AmountValidationMatrix::validate(-1, AmountValidationCategory::PeriodId);
+        assert!(result.is_err());
+        let (err, _) = result.unwrap_err();
+        assert_eq!(err, RevoraError::InvalidPeriodId);
+    }
+
+    // ── Simulation validation ─────────────────────────────────────
+
+    #[test]
+    fn simulation_positive_accepted() {
+        let result = AmountValidationMatrix::validate(1000, AmountValidationCategory::Simulation);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn simulation_zero_accepted() {
+        let result = AmountValidationMatrix::validate(0, AmountValidationCategory::Simulation);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn simulation_negative_accepted() {
+        let result = AmountValidationMatrix::validate(-1000, AmountValidationCategory::Simulation);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn simulation_i128_min_accepted() {
+        let result =
+            AmountValidationMatrix::validate(i128::MIN, AmountValidationCategory::Simulation);
+        assert!(result.is_ok());
+    }
+
+    // ── Stake Range validation ────────────────────────────────────
+
+    #[test]
+    fn stake_range_min_less_than_max_accepted() {
+        let result = AmountValidationMatrix::validate_stake_range(100, 1000);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn stake_range_min_equals_max_accepted() {
+        let result = AmountValidationMatrix::validate_stake_range(500, 500);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn stake_range_min_greater_than_max_rejected() {
+        let result = AmountValidationMatrix::validate_stake_range(1000, 100);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), RevoraError::InvalidAmount);
+    }
+
+    #[test]
+    fn stake_range_max_zero_unlimited_accepted() {
+        let result = AmountValidationMatrix::validate_stake_range(100, 0);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn stake_range_both_zero_accepted() {
+        let result = AmountValidationMatrix::validate_stake_range(0, 0);
+        assert!(result.is_ok());
+    }
+
+    // ── Snapshot Monotonic validation ──────────────────────────────
+
+    #[test]
+    fn snapshot_monotonic_increasing_accepted() {
+        let result = AmountValidationMatrix::validate_snapshot_monotonic(100, 50);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn snapshot_monotonic_equal_rejected() {
+        let result = AmountValidationMatrix::validate_snapshot_monotonic(50, 50);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), RevoraError::OutdatedSnapshot);
+    }
+
+    #[test]
+    fn snapshot_monotonic_decreasing_rejected() {
+        let result = AmountValidationMatrix::validate_snapshot_monotonic(50, 100);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), RevoraError::OutdatedSnapshot);
+    }
+
+    // ── Batch validation ──────────────────────────────────────────
+
+    #[test]
+    fn batch_validate_all_valid() {
+        let amounts = [100, 200, 300];
+        let result = AmountValidationMatrix::validate_batch(
+            &amounts,
+            AmountValidationCategory::RevenueReport,
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn batch_validate_first_invalid() {
+        let amounts = [-100, 200, 300];
+        let result = AmountValidationMatrix::validate_batch(
+            &amounts,
+            AmountValidationCategory::RevenueReport,
+        );
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn batch_validate_middle_invalid() {
+        let amounts = [100, -200, 300];
+        let result = AmountValidationMatrix::validate_batch(
+            &amounts,
+            AmountValidationCategory::RevenueReport,
+        );
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), 1);
+    }
+
+    #[test]
+    fn batch_validate_last_invalid() {
+        let amounts = [100, 200, -300];
+        let result = AmountValidationMatrix::validate_batch(
+            &amounts,
+            AmountValidationCategory::RevenueReport,
+        );
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), 2);
+    }
+
+    #[test]
+    fn batch_validate_empty_array() {
+        let amounts: [i128; 0] = [];
+        let result = AmountValidationMatrix::validate_batch(
+            &amounts,
+            AmountValidationCategory::RevenueReport,
+        );
+        assert!(result.is_none());
+    }
+
+    // ── Detailed validation result ────────────────────────────────
+
+    #[test]
+    fn validate_detailed_valid() {
+        let result = AmountValidationMatrix::validate_detailed(
+            100,
+            AmountValidationCategory::RevenueDeposit,
+        );
+        assert!(result.is_valid);
+        assert_eq!(result.amount, 100);
+        assert_eq!(result.category, AmountValidationCategory::RevenueDeposit);
+        assert!(result.error_code.is_none());
+    }
+
+    #[test]
+    fn validate_detailed_invalid() {
+        let result = AmountValidationMatrix::validate_detailed(
+            -100,
+            AmountValidationCategory::RevenueDeposit,
+        );
+        assert!(!result.is_valid);
+        assert_eq!(result.amount, -100);
+        assert_eq!(result.category, AmountValidationCategory::RevenueDeposit);
+        assert!(result.error_code.is_some());
+        assert_eq!(result.error_code.unwrap(), RevoraError::InvalidAmount as u32);
+    }
+
+    // ── Category for function mapping ──────────────────────────────
+
+    #[test]
+    fn category_for_deposit_revenue() {
+        let cat = AmountValidationMatrix::category_for_function("deposit_revenue");
+        assert!(cat.is_some());
+        assert_eq!(cat.unwrap(), AmountValidationCategory::RevenueDeposit);
+    }
+
+    #[test]
+    fn category_for_report_revenue() {
+        let cat = AmountValidationMatrix::category_for_function("report_revenue");
+        assert!(cat.is_some());
+        assert_eq!(cat.unwrap(), AmountValidationCategory::RevenueReport);
+    }
+
+    #[test]
+    fn category_for_set_holder_share() {
+        let cat = AmountValidationMatrix::category_for_function("set_holder_share");
+        assert!(cat.is_some());
+        assert_eq!(cat.unwrap(), AmountValidationCategory::HolderShare);
+    }
+
+    #[test]
+    fn category_for_simulate_distribution() {
+        let cat = AmountValidationMatrix::category_for_function("simulate_distribution");
+        assert!(cat.is_some());
+        assert_eq!(cat.unwrap(), AmountValidationCategory::Simulation);
+    }
+
+    #[test]
+    fn category_for_unknown_function() {
+        let cat = AmountValidationMatrix::category_for_function("unknown_function");
+        assert!(cat.is_none());
+    }
+
+    // ── Integration: deposit_revenue rejects negative ───────────────
+
+    #[test]
+    fn matrix_deposit_revenue_negative_amount_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = make_client(&env);
+
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &payout, &0);
+
+        let result = client.try_deposit_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &payout,
+            &-1000i128,
+            &1,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn matrix_deposit_revenue_zero_amount_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = make_client(&env);
+
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &payout, &0);
+
+        let result =
+            client.try_deposit_revenue(&issuer, &symbol_short!("def"), &token, &payout, &0i128, &1);
+        assert!(result.is_err());
+    }
+
+    // ── Integration: report_revenue rejects negative ───────────────
+
+    #[test]
+    fn matrix_report_revenue_negative_amount_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = make_client(&env);
+
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &payout, &0);
+
+        let result = client.try_report_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &payout,
+            &-500i128,
+            &1,
+            &false,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn matrix_report_revenue_zero_amount_accepted() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = make_client(&env);
+
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &payout, &0);
+
+        let result = client.try_report_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &payout,
+            &0i128,
+            &1,
+            &false,
+        );
+        assert!(result.is_ok());
+    }
+
+    // ── Integration: register_offering with negative supply_cap ───
+
+    #[test]
+    fn matrix_register_offering_negative_supply_cap_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = make_client(&env);
+
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        let result = client.try_register_offering(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &1000,
+            &payout,
+            &-10000i128,
+        );
+        assert!(result.is_err());
+    }
+
+    // ── Integration: set_investment_constraints rejects negatives ──
+
+    #[test]
+    fn matrix_investment_constraints_negative_min_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = make_client(&env);
+
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &payout, &0);
+
+        let result = client.try_set_investment_constraints(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &-100i128,
+            &1000i128,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn matrix_investment_constraints_negative_max_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = make_client(&env);
+
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &payout, &0);
+
+        let result = client.try_set_investment_constraints(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &100i128,
+            &-1000i128,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn matrix_investment_constraints_min_greater_than_max_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = make_client(&env);
+
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &payout, &0);
+
+        let result = client.try_set_investment_constraints(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &1000i128,
+            &100i128,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn deposit_revenue_zero_amount_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = make_client(&env);
+
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &payout, &0);
+
+        let result =
+            client.try_deposit_revenue(&issuer, &symbol_short!("def"), &token, &payout, &0i128, &1);
+        assert!(result.is_err());
+    }
+
+    // ── Integration: report_revenue rejects negative ───────────────
+
+    #[test]
+    fn report_revenue_negative_amount_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = make_client(&env);
+
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &payout, &0);
+
+        let result = client.try_report_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &payout,
+            &-500i128,
+            &1,
+            &false,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn report_revenue_zero_amount_accepted() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = make_client(&env);
+
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &payout, &0);
+
+        let result = client.try_report_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &payout,
+            &0i128,
+            &1,
+            &false,
+        );
+        assert!(result.is_ok());
+    }
+
+    // ── Integration: register_offering with negative supply_cap ───
+
+    #[test]
+    fn register_offering_negative_supply_cap_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = make_client(&env);
+
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        let result = client.try_register_offering(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &1000,
+            &payout,
+            &-10000i128,
+        );
+        assert!(result.is_err());
+    }
+
+    // ── Integration: set_investment_constraints rejects negatives ──
+
+    #[test]
+    fn investment_constraints_negative_min_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = make_client(&env);
+
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &payout, &0);
+
+        let result = client.try_set_investment_constraints(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &-100i128,
+            &1000i128,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn investment_constraints_negative_max_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = make_client(&env);
+
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &payout, &0);
+
+        let result = client.try_set_investment_constraints(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &100i128,
+            &-1000i128,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn investment_constraints_min_greater_than_max_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = make_client(&env);
+
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &payout, &0);
+
+        let result = client.try_set_investment_constraints(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &1000i128,
+            &100i128,
+        );
+        assert!(result.is_err());
+    }
+
+    // ── Integration: set_min_revenue_threshold rejects negative ────
+
+    #[test]
+    fn matrix_set_min_revenue_threshold_negative_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = make_client(&env);
+
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &payout, &0);
+
+        let result =
+            client.try_set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &-500i128);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn matrix_set_min_revenue_threshold_zero_accepted() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = make_client(&env);
+
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &payout, &0);
+
+        let result =
+            client.try_set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &0i128);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn min_revenue_threshold_zero_accepted() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = make_client(&env);
+
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &payout, &0);
+
+        let result =
+            client.try_set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &0i128);
+        assert!(result.is_ok());
+    }
+
+    // ── Security boundary: boundary value tests ───────────────────
+
+    #[test]
+    fn all_categories_boundary_i128_min() {
+        let categories = [
+            AmountValidationCategory::RevenueDeposit,
+            AmountValidationCategory::RevenueReport,
+            AmountValidationCategory::HolderShare,
+            AmountValidationCategory::MinRevenueThreshold,
+            AmountValidationCategory::SupplyCap,
+            AmountValidationCategory::InvestmentMinStake,
+            AmountValidationCategory::InvestmentMaxStake,
+            AmountValidationCategory::SnapshotReference,
+            AmountValidationCategory::PeriodId,
+        ];
+
+        for cat in categories.iter() {
+            let result = AmountValidationMatrix::validate(i128::MIN, *cat);
+            match cat {
+                AmountValidationCategory::RevenueReport
+                | AmountValidationCategory::HolderShare
+                | AmountValidationCategory::MinRevenueThreshold
+                | AmountValidationCategory::SupplyCap
+                | AmountValidationCategory::InvestmentMinStake
+                | AmountValidationCategory::InvestmentMaxStake
+                | AmountValidationCategory::PeriodId => {
+                    assert!(result.is_err(), "i128::MIN should fail for {:?}", cat);
+                }
+                AmountValidationCategory::RevenueDeposit
+                | AmountValidationCategory::SnapshotReference => {
+                    assert!(result.is_err(), "i128::MIN should fail for {:?}", cat);
+                }
+                AmountValidationCategory::Simulation => {
+                    assert!(result.is_ok(), "i128::MIN should pass for Simulation");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn all_categories_boundary_i128_max() {
+        let categories = [
+            AmountValidationCategory::RevenueDeposit,
+            AmountValidationCategory::RevenueReport,
+            AmountValidationCategory::HolderShare,
+            AmountValidationCategory::MinRevenueThreshold,
+            AmountValidationCategory::SupplyCap,
+            AmountValidationCategory::InvestmentMinStake,
+            AmountValidationCategory::InvestmentMaxStake,
+            AmountValidationCategory::SnapshotReference,
+            AmountValidationCategory::Simulation,
+        ];
+
+        for cat in categories.iter() {
+            let result = AmountValidationMatrix::validate(i128::MAX, *cat);
+            match cat {
+                AmountValidationCategory::SnapshotReference => {
+                    assert!(result.is_ok(), "i128::MAX should pass for SnapshotReference");
+                }
+                _ => {
+                    assert!(result.is_ok(), "i128::MAX should pass for {:?}", cat);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn all_categories_boundary_minus_one() {
+        let categories = [
+            AmountValidationCategory::RevenueDeposit,
+            AmountValidationCategory::RevenueReport,
+            AmountValidationCategory::HolderShare,
+            AmountValidationCategory::MinRevenueThreshold,
+            AmountValidationCategory::SupplyCap,
+            AmountValidationCategory::InvestmentMinStake,
+            AmountValidationCategory::InvestmentMaxStake,
+            AmountValidationCategory::SnapshotReference,
+            AmountValidationCategory::Simulation,
+        ];
+
+        for cat in categories.iter() {
+            let result = AmountValidationMatrix::validate(-1, *cat);
+            match cat {
+                AmountValidationCategory::Simulation => {
+                    assert!(result.is_ok(), "-1 should pass for Simulation");
+                }
+                _ => {
+                    assert!(result.is_err(), "-1 should fail for {:?}", cat);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn all_categories_boundary_zero() {
+        let categories = [
+            AmountValidationCategory::RevenueDeposit,
+            AmountValidationCategory::RevenueReport,
+            AmountValidationCategory::HolderShare,
+            AmountValidationCategory::MinRevenueThreshold,
+            AmountValidationCategory::SupplyCap,
+            AmountValidationCategory::InvestmentMinStake,
+            AmountValidationCategory::InvestmentMaxStake,
+            AmountValidationCategory::SnapshotReference,
+            AmountValidationCategory::Simulation,
+        ];
+
+        for cat in categories.iter() {
+            let result = AmountValidationMatrix::validate(0, *cat);
+            match cat {
+                AmountValidationCategory::RevenueDeposit
+                | AmountValidationCategory::SnapshotReference => {
+                    assert!(result.is_err(), "0 should fail for {:?}", cat);
+                }
+                _ => {
+                    assert!(result.is_ok(), "0 should pass for {:?}", cat);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn all_categories_boundary_one() {
+        let categories = [
+            AmountValidationCategory::RevenueDeposit,
+            AmountValidationCategory::RevenueReport,
+            AmountValidationCategory::HolderShare,
+            AmountValidationCategory::MinRevenueThreshold,
+            AmountValidationCategory::SupplyCap,
+            AmountValidationCategory::InvestmentMinStake,
+            AmountValidationCategory::InvestmentMaxStake,
+            AmountValidationCategory::SnapshotReference,
+            AmountValidationCategory::Simulation,
+        ];
+
+        for cat in categories {
+            let result = AmountValidationMatrix::validate(1, cat);
+            assert!(result.is_ok(), "1 should pass for {:?}", cat);
+        }
+    }
+
+    // ── Event emission on validation failure ──────────────────────
+
+    #[test]
+    fn matrix_validation_failure_emits_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = make_client(&env);
+
+        let issuer = Address::generate(&env);
+        let token = Address::generate(&env);
+        let payout = Address::generate(&env);
+
+        client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &payout, &0);
+
+        let result = client.try_deposit_revenue(
+            &issuer,
+            &symbol_short!("def"),
+            &token,
+            &payout,
+            &-100i128,
+            &1,
+        );
+        assert!(result.is_err(), "Negative amount should be rejected");
+    }
+}
