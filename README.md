@@ -111,7 +111,7 @@ Accepted ranges and rejection semantics:
 |-----------|----------------|----------------|------------------|
 | `revenue_share_bps` | `register_offering` | 0–10000 (testnet: any) | `InvalidRevenueShareBps` |
 | `share_bps` | `set_holder_share` | 0–10000 | `InvalidShareBps` |
-| `amount` | `report_revenue` | ≥ 0 | `InvalidAmount` |
+| `amount` | `report_revenue` | > 0 | `InvalidAmount` |
 | `amount` | `deposit_revenue` | > 0 | `InvalidAmount` |
 | `period_id` | `deposit_revenue` | > 0 | `InvalidPeriodId` |
 | `period_id` | `report_revenue` | any u64 | — |
@@ -2248,6 +2248,7 @@ This section enumerates key security assumptions, trust boundaries, and mitigati
 - **Blacklist authority:** Only the current issuer of the offering can add/remove blacklist entries for that offering's token. This ensures issuers have full control over compliance and investor management.
 - **Concentration data:** Holder concentration is not derived on-chain. The contract trusts the value passed to `report_concentration`. Enforcing or warning is based on this reported value; manipulation of the reported value can bypass the guardrail.
 - **Revenue reports:** The contract does not verify that reported revenue amounts are correct or consistent with any external source. It only records and aggregates them for the audit summary and emits events.
+- **Zero-value revenue policy:** Revenue reports and deposits must have positive amounts (> 0). Zero or negative amounts are rejected to prevent invalid reports and ensure meaningful audit trails.
 
 ### Threat model and mitigations
 
@@ -2256,6 +2257,7 @@ This section enumerates key security assumptions, trust boundaries, and mitigati
 | **Auth misuse / wrong signer** | All state-changing entrypoints call `require_auth` on the appropriate address. Auth failures cause host panic; use `try_*` client methods to handle errors. Issuer-only enforcement for blacklist operations. Tests: `blacklist_add_requires_auth`, `blacklist_remove_requires_auth`, `blacklist_add_requires_issuer_auth`, `blacklist_remove_requires_issuer_auth`. |
 | **Issuer transfer security** | Two-step propose/accept flow prevents accidental loss of control. Old issuer must propose, new issuer must explicitly accept. Either can abort (old cancels, new doesn't accept). Current issuer verified via reverse lookup on all auth checks. Tests: `issuer_transfer_*` (35 tests covering happy path, abuse attempts, edge cases, and integration). |
 | **Incorrect math (overflow, rounding)** | Revenue share bps is capped at 10000. `compute_share` uses checked arithmetic where applicable and clamps output to [0, amount]. Rounding modes (Truncation, RoundHalfUp) are documented and tested. Tests: `compute_share_*`, `register_offering_rejects_bps_over_10000`. |
+| **Invalid revenue amounts** | Zero-value revenue policy rejects amounts ≤ 0 for both deposits and reports. Prevents spam reports and ensures positive revenue flows. Tests: `zero_amount_revenue_report_rejected`, `negative_amount_revenue_report_rejected`, `deposit_revenue_rejects_zero_amount`, `deposit_revenue_rejects_negative_amount`. |
 | **Concentration guardrail bypass** | Enforcement is applied in `report_revenue` using the last value set by `report_concentration`. If concentration is not reported or is reported low, enforcement cannot block. Design: guardrail is advisory or best-effort unless the issuer reliably reports concentration before each report. Tests: concentration_enforce_blocks_report_revenue_when_over_limit, concentration_near_threshold_boundary. |
 | **Audit summary consistency** | Summary is updated atomically in `report_revenue` (total_revenue += amount, report_count += 1). No corrections or overrides are supported; each report is additive. Tests: audit_summary_aggregates_revenue_and_count, audit_summary_per_offering_isolation. |
 | **Storage / gas exhaustion** | Large blacklists and many offerings increase read/write cost. Pagination (max 20 per page) and stress tests document behavior. No unbounded loops over user-controlled collections except the blacklist map (bounded by who is added). Tests: storage_stress_*, gas_characterization_*. |

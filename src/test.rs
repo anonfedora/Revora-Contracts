@@ -707,7 +707,7 @@ fn max_bps_offering() {
 }
 
 #[test]
-fn zero_amount_revenue_report() {
+fn zero_amount_revenue_report_rejected() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -718,42 +718,28 @@ fn zero_amount_revenue_report() {
     let token = Address::generate(&env);
 
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &token, &0);
-    client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &0, &1, &false);
+    let result = client.try_report_revenue(&issuer, &symbol_short!("def"), &token, &token, &0, &1, &false);
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err(), RevoraError::InvalidAmount);
+}
 
-    let empty_bl = Vec::<Address>::new(&env);
-    assert_eq!(
-        env.events().all(),
-        vec![
-            &env,
-            (
-                contract_id.clone(),
-                (symbol_short!("offer_reg"), issuer.clone()).into_val(&env),
-                (token.clone(), 1000_u32, token.clone()).into_val(&env),
-            ),
-            (
-                contract_id.clone(),
-                (symbol_short!("rev_init"), issuer.clone(), token.clone()).into_val(&env),
-                (0i128, 1u64, empty_bl.clone()).into_val(&env),
-            ),
-            (
-                contract_id.clone(),
-                (symbol_short!("rev_inia"), issuer.clone(), token.clone(), token.clone())
-                    .into_val(&env),
-                (0i128, 1u64, empty_bl.clone()).into_val(&env),
-            ),
-            (
-                contract_id.clone(),
-                (symbol_short!("rev_rep"), issuer.clone(), token.clone()).into_val(&env),
-                (0i128, 1u64, empty_bl.clone()).into_val(&env),
-            ),
-            (
-                contract_id.clone(),
-                (symbol_short!("rev_repa"), issuer.clone(), token.clone(), token.clone())
-                    .into_val(&env),
-                (0i128, 1u64).into_val(&env),
-            ),
-        ]
-    );
+}
+
+#[test]
+fn negative_amount_revenue_report_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, RevoraRevenueShare);
+    let client = RevoraRevenueShareClient::new(&env, &contract_id);
+
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &token, &0);
+    let result = client.try_report_revenue(&issuer, &symbol_short!("def"), &token, &token, &-1, &1, &false);
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err(), RevoraError::InvalidAmount);
 }
 
 #[test]
