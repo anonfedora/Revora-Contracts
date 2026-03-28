@@ -2246,6 +2246,88 @@ fn set_concentration_limit_stores_config() {
 }
 
 #[test]
+fn set_concentration_limit_bounds_check() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let payout_asset = Address::generate(&env);
+    client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
+    
+    let res = client.try_set_concentration_limit(&issuer, &symbol_short!("def"), &token, &10001, &false);
+    assert!(res.is_err());
+}
+
+#[test]
+fn report_concentration_bounds_check() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let payout_asset = Address::generate(&env);
+    client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
+    
+    let res = client.try_report_concentration(&issuer, &symbol_short!("def"), &token, &10001);
+    assert!(res.is_err());
+}
+
+#[test]
+fn set_concentration_limit_respects_pause() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, RevoraRevenueShare);
+    let client = RevoraRevenueShareClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let issuer = admin.clone();
+    let token = Address::generate(&env);
+    let payout_asset = Address::generate(&env);
+    client.initialize(&admin, &None, &None::<bool>);
+    client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
+    
+    client.pause_admin(&admin);
+    let res = client.try_set_concentration_limit(&issuer, &symbol_short!("def"), &token, &5000, &false);
+    assert!(res.is_err());
+}
+
+#[test]
+fn report_concentration_respects_pause() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, RevoraRevenueShare);
+    let client = RevoraRevenueShareClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let issuer = admin.clone();
+    let token = Address::generate(&env);
+    let payout_asset = Address::generate(&env);
+    client.initialize(&admin, &None, &None::<bool>);
+    client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
+    
+    client.pause_admin(&admin);
+    let res = client.try_report_concentration(&issuer, &symbol_short!("def"), &token, &5000);
+    assert!(res.is_err());
+}
+
+#[test]
+fn report_concentration_emits_audit_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, RevoraRevenueShare);
+    let client = RevoraRevenueShareClient::new(&env, &contract_id);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let payout_asset = Address::generate(&env);
+    client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
+    
+    let before = env.events().all().len();
+    client.report_concentration(&issuer, &symbol_short!("def"), &token, &3000);
+    
+    let events = env.events().all();
+    assert!(events.len() > before);
+}
+
+#[test]
 fn report_concentration_emits_warning_when_over_limit() {
     let env = Env::default();
     env.mock_all_auths();

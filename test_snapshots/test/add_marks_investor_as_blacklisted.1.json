@@ -1254,6 +1254,12 @@
             "data": {
               "vec": [
                 {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "symbol": "def"
+                },
+                {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
@@ -1477,7 +1483,7 @@
       "event": {
         "ext": "v0",
         "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-        "type_": "contract",
+        "type_": "diagnostic",
         "body": {
           "v0": {
             "topics": [
@@ -1507,7 +1513,7 @@
           }
         }
       },
-      "failed_call": false
+      "failed_call": true
     },
     {
       "event": {
@@ -1518,17 +1524,21 @@
           "v0": {
             "topics": [
               {
-                "symbol": "fn_return"
+                "symbol": "error"
               },
               {
-                "symbol": "blacklist_add"
+                "error": {
+                  "contract": 4
+                }
               }
             ],
-            "data": "void"
+            "data": {
+              "string": "escalating Ok(ScErrorType::Contract) frame-exit to Err"
+            }
           }
         }
       },
-      "failed_call": false
+      "failed_call": true
     },
     {
       "event": {
@@ -1539,13 +1549,12 @@
           "v0": {
             "topics": [
               {
-                "symbol": "fn_call"
+                "symbol": "error"
               },
               {
-                "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
-              },
-              {
-                "symbol": "is_blacklisted"
+                "error": {
+                  "contract": 4
+                }
               }
             ],
             "data": {
@@ -1572,20 +1581,22 @@
     {
       "event": {
         "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
+        "contract_id": null,
         "type_": "diagnostic",
         "body": {
           "v0": {
             "topics": [
               {
-                "symbol": "fn_return"
+                "symbol": "error"
               },
               {
-                "symbol": "is_blacklisted"
+                "error": {
+                  "contract": 4
+                }
               }
             ],
             "data": {
-              "bool": true
+              "string": "escalating error to panic"
             }
           }
         }

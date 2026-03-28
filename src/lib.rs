@@ -2033,6 +2033,13 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
         enforce: bool,
     ) -> Result<(), RevoraError> {
         Self::require_not_frozen(&env)?;
+        if env.storage().persistent().get::<DataKey, bool>(&DataKey::Paused).unwrap_or(false) {
+            return Err(RevoraError::ContractPaused);
+        }
+
+        if max_bps > 10_000 {
+            return Err(RevoraError::InvalidShareBps);
+        }
 
         // Verify offering exists and issuer is current
         let offering_id = OfferingId {
@@ -2077,7 +2084,14 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
         concentration_bps: u32,
     ) -> Result<(), RevoraError> {
         Self::require_not_frozen(&env)?;
+        if env.storage().persistent().get::<DataKey, bool>(&DataKey::Paused).unwrap_or(false) {
+            return Err(RevoraError::ContractPaused);
+        }
         issuer.require_auth();
+
+        if concentration_bps > 10_000 {
+            return Err(RevoraError::InvalidShareBps);
+        }
         let offering_id = OfferingId {
             issuer: issuer.clone(),
             namespace: namespace.clone(),
@@ -2104,10 +2118,17 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
         {
             if config.max_bps > 0 && concentration_bps > config.max_bps {
                 env.events().publish(
-                    (EVENT_CONCENTRATION_WARNING, issuer, namespace, token),
+                    (EVENT_CONCENTRATION_WARNING, issuer.clone(), namespace.clone(), token.clone()),
                     (concentration_bps, config.max_bps),
                 );
             }
+        }
+        
+        if !Self::is_event_only(&env) {
+            env.events().publish(
+                (EVENT_CONCENTRATION_REPORTED, issuer, namespace, token),
+                concentration_bps,
+            );
         }
         Ok(())
     }
