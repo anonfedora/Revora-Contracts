@@ -865,7 +865,7 @@ fn it_emits_versioned_events() {
 
     // enable versioned events for this test
     env.as_contract(&contract_id, || {
-        env.storage().persistent().set(&crate::DataKey::EventVersioningEnabled, &true);
+        env.storage().persistent().set(&crate::DataKey::ContractFlags, &(true, false));
     });
 
     client.register_offering(&issuer, &symbol_short!("def"), &token, &bps, &payout, &0);
@@ -5457,10 +5457,8 @@ fn register_blocked_while_paused() {
     let client = make_client(&env);
     let admin = Address::generate(&env);
     let issuer = admin.clone();
-
     let token = Address::generate(&env);
     let payout_asset = Address::generate(&env);
-
     client.initialize(&admin, &None::<Address>, &None::<bool>);
     client.pause_admin(&admin);
     assert!(client
@@ -5476,12 +5474,9 @@ fn report_blocked_while_paused() {
     let client = make_client(&env);
     let admin = Address::generate(&env);
     let issuer = admin.clone();
-
     let token = Address::generate(&env);
     let payout_asset = Address::generate(&env);
-
     client.initialize(&admin, &None::<Address>, &None::<bool>);
-    // Register before pausing
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
     client.pause_admin(&admin);
     assert!(client
