@@ -182,6 +182,9 @@ const EVENT_META_DELEGATE_SET: Symbol = symbol_short!("meta_del");
 const EVENT_META_SHARE_SET: Symbol = symbol_short!("meta_shr");
 const EVENT_META_REV_APPROVE: Symbol = symbol_short!("meta_rev");
 
+/// Current schema for `EVENT_INDEXED_V2` topics.
+const INDEXER_EVENT_SCHEMA_VERSION: u32 = 2;
+
 const BPS_DENOMINATOR: i128 = 10_000;
 
 /// Represents a revenue-share offering registered on-chain.
