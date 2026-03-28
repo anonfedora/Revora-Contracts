@@ -178,6 +178,7 @@ const EVENT_CLAIM_WINDOW_SET: Symbol = symbol_short!("clm_win");
 const EVENT_META_SIGNER_SET: Symbol = symbol_short!("meta_key");
 const EVENT_META_DELEGATE_SET: Symbol = symbol_short!("meta_del");
 const EVENT_META_SHARE_SET: Symbol = symbol_short!("meta_shr");
+const EVENT_MULTISIG_INIT: Symbol = symbol_short!("ms_init");
 const EVENT_META_REV_APPROVE: Symbol = symbol_short!("meta_rev");
 
 const BPS_DENOMINATOR: i128 = 10_000;
@@ -1275,16 +1276,7 @@ impl RevoraRevenueShare {
             (payout_asset.clone(), amount, period_id),
         );
 
-        // Audit log summary (#34): maintain per-offering total revenue and report count
-        let summary_key = DataKey::AuditSummary(offering_id.clone());
-        let mut summary: AuditSummary = env
-            .storage()
-            .persistent()
-            .get(&summary_key)
-            .unwrap_or(AuditSummary { total_revenue: 0, report_count: 0 });
-        summary.total_revenue = summary.total_revenue.saturating_add(amount);
-        summary.report_count = summary.report_count.saturating_add(1);
-        env.storage().persistent().set(&summary_key, &summary);
+
         // Optionally emit versioned v1 events for forward-compatible consumers
         if Self::is_event_versioning_enabled(env.clone()) {
             env.events().publish(
@@ -2942,43 +2934,6 @@ impl RevoraRevenueShare {
         env.storage().persistent().get(&count_key).unwrap_or(0)
     }
 
-    /// Test helper: insert a period entry and revenue without transferring tokens.
-    /// Only compiled in test builds to avoid affecting production contract.
-    #[cfg(test)]
-    pub fn test_insert_period(
-        env: Env,
-        issuer: Address,
-        namespace: Symbol,
-        token: Address,
-        period_id: u64,
-        amount: i128,
-    ) {
-        let offering_id = OfferingId {
-            issuer: issuer.clone(),
-            namespace: namespace.clone(),
-            token: token.clone(),
-        };
-        // Append to indexed period list
-        let count_key = DataKey::PeriodCount(offering_id.clone());
-        let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
-        let entry_key = DataKey::PeriodEntry(offering_id.clone(), count);
-        env.storage().persistent().set(&entry_key, &period_id);
-        env.storage().persistent().set(&count_key, &(count + 1));
-
-        // Store period revenue and deposit time
-        let rev_key = DataKey::PeriodRevenue(offering_id.clone(), period_id);
-        env.storage().persistent().set(&rev_key, &amount);
-        let time_key = DataKey::PeriodDepositTime(offering_id.clone(), period_id);
-        let deposit_time = env.ledger().timestamp();
-        env.storage().persistent().set(&time_key, &deposit_time);
-
-        // Update cumulative deposited revenue
-        let deposited_key = DataKey::DepositedRevenue(offering_id.clone());
-        let deposited: i128 = env.storage().persistent().get(&deposited_key).unwrap_or(0);
-        let new_deposited = deposited.saturating_add(amount);
-        env.storage().persistent().set(&deposited_key, &new_deposited);
-    }
-
     // ── On-chain distribution simulation (#29) ────────────────────
 
     /// Read-only: simulate distribution for sample inputs without mutating state.
@@ -3055,6 +3010,8 @@ impl RevoraRevenueShare {
 
     // ── Multisig admin logic ───────────────────────────────────
 
+    pub const MAX_MULTISIG_OWNERS: u32 = 20;
+
     /// Initialize the multisig admin system. May only be called once.
     /// Only the caller (deployer/admin) needs to authorize; owners are registered
     /// without requiring their individual signatures at init time.
@@ -3069,18 +3026,44 @@ impl RevoraRevenueShare {
         threshold: u32,
     ) -> Result<(), RevoraError> {
         caller.require_auth();
+
+        // Must be the initialized admin
+        let admin: Address =
+            env.storage().persistent().get(&DataKey::Admin).ok_or(RevoraError::NotInitialized)?;
+        if caller != admin {
+            return Err(RevoraError::NotAuthorized);
+        }
+
         if env.storage().persistent().has(&DataKey::MultisigThreshold) {
             return Err(RevoraError::LimitReached); // Already initialized
         }
         if owners.is_empty() {
             return Err(RevoraError::LimitReached); // Must have at least one owner
         }
+        if owners.len() > Self::MAX_MULTISIG_OWNERS {
+            return Err(RevoraError::LimitReached);
+        }
         if threshold == 0 || threshold > owners.len() {
             return Err(RevoraError::LimitReached); // Improper threshold
         }
+
+        // Check for duplicate owners
+        for i in 0..owners.len() {
+            let owner_i = owners.get(i).unwrap();
+            for j in (i + 1)..owners.len() {
+                if owner_i == owners.get(j).unwrap() {
+                    return Err(RevoraError::LimitReached);
+                }
+            }
+        }
+
         env.storage().persistent().set(&DataKey::MultisigThreshold, &threshold);
         env.storage().persistent().set(&DataKey::MultisigOwners, &owners);
         env.storage().persistent().set(&DataKey::MultisigProposalCount, &0_u32);
+
+        env.events()
+            .publish((EVENT_MULTISIG_INIT, caller.clone()), (owners.len(), threshold));
+
         Ok(())
     }
 
@@ -3994,6 +3977,50 @@ mod vesting_test;
 mod test_utils;
 
 mod chunking_tests;
+
+
+#[cfg(any(test, feature = "testutils"))]
+impl RevoraRevenueShare {
+    /// Test helper: insert a period entry and revenue without transferring tokens.
+    /// Only compiled in test builds to avoid affecting production contract.
+    #[cfg(test)]
+    pub fn test_insert_period(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+        period_id: u64,
+        amount: i128,
+    ) {
+        let offering_id = OfferingId {
+            issuer: issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+        };
+        // Append to indexed period list
+        let count_key = DataKey::PeriodCount(offering_id.clone());
+        let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+        let entry_key = DataKey::PeriodEntry(offering_id.clone(), count);
+        env.storage().persistent().set(&entry_key, &period_id);
+        env.storage().persistent().set(&count_key, &(count + 1));
+
+        // Store period revenue and deposit time
+        let rev_key = DataKey::PeriodRevenue(offering_id.clone(), period_id);
+        env.storage().persistent().set(&rev_key, &amount);
+        let time_key = DataKey::PeriodDepositTime(offering_id.clone(), period_id);
+        let deposit_time = env.ledger().timestamp();
+        env.storage().persistent().set(&time_key, &deposit_time);
+
+        // Update cumulative deposited revenue
+        let deposited_key = DataKey::DepositedRevenue(offering_id.clone());
+        let deposited: i128 = env.storage().persistent().get(&deposited_key).unwrap_or(0);
+        let new_deposited = deposited.saturating_add(amount);
+        env.storage().persistent().set(&deposited_key, &new_deposited);
+    }
+
+
+}
+
 mod test;
 mod test_auth;
 mod test_cross_contract;
