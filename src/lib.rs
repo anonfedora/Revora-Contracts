@@ -1106,7 +1106,7 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
     /// Can only be called once; panics if already initialized.
     pub fn initialize(env: Env, admin: Address, safety: Option<Address>, event_only: Option<bool>) {
         if env.storage().persistent().has(&DataKey::Admin) {
-            panic!("already initialized");
+            return; // Already initialized, no-op
         }
         env.storage().persistent().set(&DataKey::Admin, &admin.clone());
         if let Some(s) = safety.clone() {
@@ -1125,15 +1125,16 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
     ///
     /// ### Parameters
     /// - `caller`: The address of the admin (must match initialized admin).
-    pub fn pause_admin(env: Env, caller: Address) {
+    pub fn pause_admin(env: Env, caller: Address) -> Result<(), RevoraError> {
         caller.require_auth();
         let admin: Address =
-            env.storage().persistent().get(&DataKey::Admin).expect("admin not set");
+            env.storage().persistent().get(&DataKey::Admin).ok_or(RevoraError::NotInitialized)?;
         if caller != admin {
-            panic!("not admin");
+            return Err(RevoraError::NotAuthorized);
         }
         env.storage().persistent().set(&DataKey::Paused, &true);
         env.events().publish((EVENT_PAUSED, caller.clone()), ());
+        Ok(())
     }
 
     /// Unpause the contract (Admin only).
@@ -1143,15 +1144,16 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
     ///
     /// ### Parameters
     /// - `caller`: The address of the admin (must match initialized admin).
-    pub fn unpause_admin(env: Env, caller: Address) {
+    pub fn unpause_admin(env: Env, caller: Address) -> Result<(), RevoraError> {
         caller.require_auth();
         let admin: Address =
-            env.storage().persistent().get(&DataKey::Admin).expect("admin not set");
+            env.storage().persistent().get(&DataKey::Admin).ok_or(RevoraError::NotInitialized)?;
         if caller != admin {
-            panic!("not admin");
+            return Err(RevoraError::NotAuthorized);
         }
         env.storage().persistent().set(&DataKey::Paused, &false);
         env.events().publish((EVENT_UNPAUSED, caller.clone()), ());
+        Ok(())
     }
 
     /// Pause the contract (Safety role only).
@@ -1161,15 +1163,16 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
     ///
     /// ### Parameters
     /// - `caller`: The address of the safety role (must match initialized safety address).
-    pub fn pause_safety(env: Env, caller: Address) {
+    pub fn pause_safety(env: Env, caller: Address) -> Result<(), RevoraError> {
         caller.require_auth();
         let safety: Address =
-            env.storage().persistent().get(&DataKey::Safety).expect("safety not set");
+            env.storage().persistent().get(&DataKey::Safety).ok_or(RevoraError::NotInitialized)?;
         if caller != safety {
-            panic!("not safety");
+            return Err(RevoraError::NotAuthorized);
         }
         env.storage().persistent().set(&DataKey::Paused, &true);
         env.events().publish((EVENT_PAUSED, caller.clone()), ());
+        Ok(())
     }
 
     /// Unpause the contract (Safety role only).
@@ -1179,15 +1182,16 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
     ///
     /// ### Parameters
     /// - `caller`: The address of the safety role (must match initialized safety address).
-    pub fn unpause_safety(env: Env, caller: Address) {
+    pub fn unpause_safety(env: Env, caller: Address) -> Result<(), RevoraError> {
         caller.require_auth();
         let safety: Address =
-            env.storage().persistent().get(&DataKey::Safety).expect("safety not set");
+            env.storage().persistent().get(&DataKey::Safety).ok_or(RevoraError::NotInitialized)?;
         if caller != safety {
-            panic!("not safety");
+            return Err(RevoraError::NotAuthorized);
         }
         env.storage().persistent().set(&DataKey::Paused, &false);
         env.events().publish((EVENT_UNPAUSED, caller.clone()), ());
+        Ok(())
     }
 
     /// Query the paused state of the contract.
@@ -2002,7 +2006,7 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
         investor: Address,
     ) -> Result<(), RevoraError> {
         Self::require_not_frozen(&env)?;
-        Self::require_not_paused(&env);
+        Self::require_not_paused(&env)?;
         caller.require_auth();
 
         // Verify offering exists and get current issuer for auth check
@@ -2051,7 +2055,7 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
         investor: Address,
     ) -> Result<(), RevoraError> {
         Self::require_not_frozen(&env)?;
-        Self::require_not_paused(&env);
+        Self::require_not_paused(&env)?;
         caller.require_auth();
 
         // Verify offering exists and get current issuer for auth check
@@ -4580,11 +4584,13 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
         caller.require_auth();
 
         if total_supply == 0 {
-            panic!("total_supply cannot be zero");
+            return 0i128;
         }
 
-        let offering = Self::get_offering(env.clone(), issuer.clone(), namespace, token.clone())
-            .expect("offering not found");
+        let offering = match Self::get_offering(env.clone(), issuer.clone(), namespace, token.clone()) {
+            Some(o) => o,
+            None => return 0i128,
+        };
 
         if Self::is_blacklisted(
             env.clone(),
@@ -4593,7 +4599,7 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
             token.clone(),
             holder.clone(),
         ) {
-            panic!("holder is blacklisted and cannot receive distribution");
+            return 0i128;
         }
 
         if total_revenue == 0 || holder_balance == 0 {

@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::{RevoraRevenueShare, RevoraRevenueShareClient};
+use crate::{AggregatedMetrics, RevoraRevenueShare, RevoraRevenueShareClient};
 use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env};
 
 fn make_client(env: &Env) -> RevoraRevenueShareClient {
@@ -8,6 +8,7 @@ fn make_client(env: &Env) -> RevoraRevenueShareClient {
     RevoraRevenueShareClient::new(env, &id)
 }
 
+/// @dev Verifies that registering the same token under different namespaces isolates their state.
 #[test]
 fn test_namespace_isolation() {
     let env = Env::default();
@@ -48,6 +49,7 @@ fn test_namespace_isolation() {
     assert_eq!(client.get_claim_delay(&issuer_b, &ns_2, &token), 7200);
 }
 
+/// @dev Verifies that a single issuer can register the same token in multiple namespaces isolated from each other.
 #[test]
 fn test_same_issuer_different_namespaces() {
     let env = Env::default();
@@ -70,6 +72,7 @@ fn test_same_issuer_different_namespaces() {
     assert!(!client.get_snapshot_config(&issuer, &ns_2, &token));
 }
 
+/// @dev Verifies that blacklisting an investor in one namespace does not affect their standing in another.
 #[test]
 fn test_cross_namespace_blacklist_isolation() {
     let env = Env::default();
@@ -96,6 +99,7 @@ fn test_cross_namespace_blacklist_isolation() {
     assert_eq!(client.get_blacklist(&issuer, &ns_2, &token).len(), 0);
 }
 
+/// @dev Verifies that attempting to access state of an unregistered namespace fails securely.
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #1)")] // OfferingNotFound
 fn test_unregistered_namespace_fails() {
@@ -111,6 +115,7 @@ fn test_unregistered_namespace_fails() {
     client.set_claim_delay(&issuer, &ns_ghost, &token, &3600);
 }
 
+/// @dev Verifies that an issuer cannot access or modify offerings they do not own, even within the same namespace.
 #[test]
 fn test_unauthorized_issuer_access_fails() {
     let env = Env::default();
@@ -136,6 +141,7 @@ fn test_unauthorized_issuer_access_fails() {
     assert!(res.is_err());
 }
 
+/// @dev Verifies that transferring an offering ownership maintains namespace isolation while correctly updating authorization.
 #[test]
 fn test_transfer_maintains_namespace_isolation() {
     let env = Env::default();
@@ -164,4 +170,48 @@ fn test_transfer_maintains_namespace_isolation() {
     // Verify Issuer A NO LONGER has control
     let res = client.try_set_claim_delay(&issuer_a, &ns_1, &token_1, &9999);
     assert!(res.is_err());
+}
+
+
+/// @dev Verifies that double-registration of the exact same (issuer, namespace, token) is rejected to prevent state clobbering.
+#[test]
+fn test_duplicate_registration_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let ns = symbol_short!("ns1");
+
+    client.register_offering(&issuer, &ns, &token, &1000, &token, &0);
+    
+    // Exact same registration should fail
+    let res = client.try_register_offering(&issuer, &ns, &token, &1000, &token, &0);
+    assert!(res.is_err());
+}
+
+/// @dev Verifies that aggregated platform and issuer metrics correctly sum across namespace boundaries.
+#[test]
+fn test_aggregation_across_namespaces() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = make_client(&env);
+
+    let issuer = Address::generate(&env);
+    let token1 = Address::generate(&env);
+    let token2 = Address::generate(&env);
+    let ns_1 = symbol_short!("prod");
+    let ns_2 = symbol_short!("stg");
+
+    client.register_offering(&issuer, &ns_1, &token1, &1000, &token1, &0);
+    client.register_offering(&issuer, &ns_2, &token2, &1000, &token2, &0);
+    
+    // Report revenue in both namespaces
+    client.report_revenue(&issuer, &ns_1, &token1, &token1, &50000, &1, &false);
+    client.report_revenue(&issuer, &ns_2, &token2, &token2, &25000, &1, &false);
+
+    let metrics = client.get_issuer_aggregation(&issuer);
+    assert_eq!(metrics.total_reported_revenue, 75000);
+    assert_eq!(metrics.offering_count, 2);
 }

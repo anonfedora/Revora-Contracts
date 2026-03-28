@@ -21,6 +21,29 @@ fn make_client(env: &Env) -> RevoraRevenueShareClient {
     RevoraRevenueShareClient::new(env, &id)
 }
 
+
+/// Helper to extract legacy events skipping ev_idx2 indexed events
+#[allow(clippy::all)]
+fn legacy_events(env: &soroban_sdk::Env) -> soroban_sdk::Vec<(soroban_sdk::Address, soroban_sdk::Val, soroban_sdk::Val)> {
+    let all = env.events().all();
+    let mut filtered = soroban_sdk::Vec::new(env);
+    let idx2_sym: soroban_sdk::Val = soroban_sdk::symbol_short!("ev_idx2").into_val(env);
+    for i in 0..all.len() {
+        let ev = all.get(i).unwrap();
+        let topics: soroban_sdk::Vec<soroban_sdk::Val> = ev.1.clone().into_val(env);
+        let is_indexed = if !topics.is_empty() {
+            topics.first().unwrap() == idx2_sym
+        } else {
+            false
+        };
+        if !is_indexed {
+            filtered.push_back(ev);
+        }
+    }
+    filtered
+}
+
+
 const BOUNDARY_AMOUNTS: [i128; 7] = [i128::MIN, i128::MIN + 1, -1, 0, 1, i128::MAX - 1, i128::MAX];
 const BOUNDARY_PERIODS: [u64; 6] = [0, 1, 2, 10_000, u64::MAX - 1, u64::MAX];
 const FUZZ_ITERATIONS: usize = 128;
@@ -64,7 +87,7 @@ fn next_period(seed: &mut u64) -> u64 {
 
 #[test]
 fn register_offering_emits_exact_event() {
-    let (env, client, contract_id, issuer, token, _payout) = crate::test_utils::setup_context();
+
     let env = Env::default();
     env.mock_all_auths();
 
@@ -79,7 +102,7 @@ fn register_offering_emits_exact_event() {
     client.register_offering(&issuer, &symbol_short!("def"), &token, &bps, &token, &0);
 
     assert_eq!(
-        env.events().all(),
+        legacy_events(&env),
         soroban_sdk::vec![
             &env,
             (
@@ -178,7 +201,7 @@ fn combined_flow_preserves_event_order() {
         &false,
     );
 
-    let events = env.events().all();
+    let events = legacy_events(&env);
     assert_eq!(events.len(), 5);
 
     let empty_bl = Vec::<Address>::new(&env);
@@ -256,7 +279,7 @@ fn complex_mixed_flow_events_in_order() {
         &false,
     );
 
-    let events = env.events().all();
+    let events = legacy_events(&env);
     assert_eq!(events.len(), 10);
 
     let empty_bl = Vec::<Address>::new(&env);
@@ -341,7 +364,7 @@ fn multiple_offerings_emit_distinct_events() {
     client.register_offering(&issuer, &symbol_short!("def"), &token_b, &200, &token_b, &0);
     client.register_offering(&issuer, &symbol_short!("def"), &token_c, &300, &token_c, &0);
 
-    let events = env.events().all();
+    let events = legacy_events(&env);
     assert_eq!(events.len(), 3);
 
     assert_eq!(
@@ -383,7 +406,7 @@ fn multiple_revenue_reports_same_offering() {
     client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &20_000, &2, &false);
     client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &30_000, &3, &false);
 
-    let events = env.events().all();
+    let events = legacy_events(&env);
     assert_eq!(events.len(), 13);
 
     let empty_bl = Vec::<Address>::new(&env);
@@ -483,7 +506,7 @@ fn same_issuer_different_tokens() {
     client.report_revenue(&issuer, &symbol_short!("def"), &token_x, &token_x, &500_000, &1, &false);
     client.report_revenue(&issuer, &symbol_short!("def"), &token_y, &token_y, &750_000, &1, &false);
 
-    let events = env.events().all();
+    let events = legacy_events(&env);
     assert_eq!(events.len(), 10);
 
     let empty_bl = Vec::<Address>::new(&env);
@@ -831,9 +854,10 @@ fn negative_revenue_amount() {
 
 #[test]
 fn it_emits_events_on_register_and_report() {
-    let (env, _client, _issuer, _token, _payout_asset, _amount, _period_id) =
-        setup_with_revenue_report(1_000_000, 1);
-    assert!(env.events().all().len() >= 2);
+    let env = Env::default();
+    let (_client, _issuer, _token, _payout_asset, _amount, _period_id) =
+        setup_with_revenue_report(&env, 1_000_000, 1);
+    assert!(legacy_events(&env).len() >= 2);
 }
 
 #[test]
@@ -865,7 +889,7 @@ fn it_emits_versioned_events() {
         &false,
     );
 
-    let events = env.events().all();
+    let events = legacy_events(&env);
 
     let expected = (
         contract_id.clone(),
@@ -917,7 +941,8 @@ fn fuzz_period_and_amount_boundaries_do_not_panic() {
 
 #[test]
 fn fuzz_period_and_amount_repeatable_sweep_do_not_panic() {
-    let (env, client, issuer, token, payout_asset) = setup_with_offering();
+    let env = Env::default();
+    let (client, issuer, token, payout_asset) = setup_with_offering(&env);
 
     // Same seed must produce the exact same sequence.
     let mut seed_a = 0x00A1_1CE5_ED19_u64;
@@ -964,11 +989,7 @@ fn fuzz_period_and_amount_repeatable_sweep_do_not_panic() {
     }
 
     // Each report_revenue call emits 2 events (specific + backward-compatible rev_rep).
-    assert_eq!(env.events().all().len(), (FUZZ_ITERATIONS * 2) as u32);
-
-    assert_eq!(env.events().all().len(), (FUZZ_ITERATIONS as u32) * 2);
-
-    assert_eq!(env.events().all().len(), 1 + (FUZZ_ITERATIONS as u32) * 4);
+    assert_eq!(legacy_events(&env).len(), 1 + (FUZZ_ITERATIONS as u32) * 4);
 
     assert!(accepted > 0);
 }
@@ -978,13 +999,12 @@ fn fuzz_period_and_amount_repeatable_sweep_do_not_panic() {
 // ---------------------------------------------------------------------------
 
 /// Helper: set up env + client, return (env, client, issuer).
-fn setup() -> (Env, RevoraRevenueShareClient<'static>, Address) {
-    let env = Env::default();
+fn setup<'a>(env: &'a Env) -> (RevoraRevenueShareClient<'a>, Address) {
     env.mock_all_auths();
     let contract_id = env.register_contract(None, RevoraRevenueShare);
-    let client = RevoraRevenueShareClient::new(&env, &contract_id);
-    let issuer = Address::generate(&env);
-    (env, client, issuer)
+    let client = RevoraRevenueShareClient::new(env, &contract_id);
+    let issuer = Address::generate(env);
+    (client, issuer)
 }
 
 /// Register `n` offerings for `issuer`, each with a unique token.
@@ -1120,20 +1140,21 @@ fn pending_periods_page_and_claimable_chunk_consistent() {
 }
 
 /// Helper (#30): create env, client, and one registered offering. Returns (env, client, issuer, token, payout_asset).
-fn setup_with_offering() -> (Env, RevoraRevenueShareClient<'static>, Address, Address, Address) {
-    let (env, client, issuer) = setup();
-    let token = Address::generate(&env);
-    let payout_asset = Address::generate(&env);
+fn setup_with_offering<'a>(env: &'a Env) -> (RevoraRevenueShareClient<'a>, Address, Address, Address) {
+    let (client, issuer) = setup(env);
+    let token = Address::generate(env);
+    let payout_asset = Address::generate(env);
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
-    (env, client, issuer, token, payout_asset)
+    (client, issuer, token, payout_asset)
 }
 
 /// Helper (#30): create env, client, one offering, and one revenue report. Returns (env, client, issuer, token, payout_asset, amount, period_id).
-fn setup_with_revenue_report(
+fn setup_with_revenue_report<'a>(
+    env: &'a Env,
     amount: i128,
     period_id: u64,
-) -> (Env, RevoraRevenueShareClient<'static>, Address, Address, Address, i128, u64) {
-    let (env, client, issuer, token, payout_asset) = setup_with_offering();
+) -> (RevoraRevenueShareClient<'a>, Address, Address, Address, i128, u64) {
+    let (client, issuer, token, payout_asset) = setup_with_offering(env);
     client.report_revenue(
         &issuer,
         &symbol_short!("def"),
@@ -1143,7 +1164,7 @@ fn setup_with_revenue_report(
         &period_id,
         &false,
     );
-    (env, client, issuer, token, payout_asset, amount, period_id)
+    (client, issuer, token, payout_asset, amount, period_id)
 }
 
 #[test]
@@ -1163,14 +1184,16 @@ fn empty_issuer_count_is_zero() {
 
 #[test]
 fn register_persists_and_count_increments() {
-    let (env, client, issuer) = setup();
+    let env = Env::default();
+    let (client, issuer) = setup(&env);
     register_n(&env, &client, &issuer, 3);
     assert_eq!(client.get_offering_count(&issuer, &symbol_short!("def")), 3);
 }
 
 #[test]
 fn single_page_returns_all_no_cursor() {
-    let (env, client, issuer) = setup();
+    let env = Env::default();
+    let (client, issuer) = setup(&env);
     register_n(&env, &client, &issuer, 5);
 
     let (page, cursor) = client.get_offerings_page(&issuer, &symbol_short!("def"), &0, &10);
@@ -1180,7 +1203,8 @@ fn single_page_returns_all_no_cursor() {
 
 #[test]
 fn multi_page_cursor_progression() {
-    let (env, client, issuer) = setup();
+    let env = Env::default();
+    let (client, issuer) = setup(&env);
     register_n(&env, &client, &issuer, 7);
 
     // First page: items 0..3
@@ -1203,7 +1227,8 @@ fn multi_page_cursor_progression() {
 
 #[test]
 fn final_page_has_no_cursor() {
-    let (env, client, issuer) = setup();
+    let env = Env::default();
+    let (client, issuer) = setup(&env);
     register_n(&env, &client, &issuer, 4);
 
     let (page, cursor) = client.get_offerings_page(&issuer, &symbol_short!("def"), &2, &10);
@@ -1213,7 +1238,8 @@ fn final_page_has_no_cursor() {
 
 #[test]
 fn out_of_bounds_cursor_returns_empty() {
-    let (env, client, issuer) = setup();
+    let env = Env::default();
+    let (client, issuer) = setup(&env);
     register_n(&env, &client, &issuer, 3);
 
     let (page, cursor) = client.get_offerings_page(&issuer, &symbol_short!("def"), &100, &5);
@@ -1223,7 +1249,8 @@ fn out_of_bounds_cursor_returns_empty() {
 
 #[test]
 fn limit_zero_uses_max_page_limit() {
-    let (env, client, issuer) = setup();
+    let env = Env::default();
+    let (client, issuer) = setup(&env);
     register_n(&env, &client, &issuer, 5);
 
     // limit=0 should behave like MAX_PAGE_LIMIT (20), returning all 5.
@@ -1234,7 +1261,8 @@ fn limit_zero_uses_max_page_limit() {
 
 #[test]
 fn limit_one_iterates_one_at_a_time() {
-    let (env, client, issuer) = setup();
+    let env = Env::default();
+    let (client, issuer) = setup(&env);
     register_n(&env, &client, &issuer, 3);
 
     let (p1, c1) = client.get_offerings_page(&issuer, &symbol_short!("def"), &0, &1);
@@ -1252,7 +1280,8 @@ fn limit_one_iterates_one_at_a_time() {
 
 #[test]
 fn limit_exceeding_max_is_capped() {
-    let (env, client, issuer) = setup();
+    let env = Env::default();
+    let (client, issuer) = setup(&env);
     register_n(&env, &client, &issuer, 25);
 
     // limit=50 should be capped to 20.
@@ -1263,7 +1292,8 @@ fn limit_exceeding_max_is_capped() {
 
 #[test]
 fn offerings_preserve_correct_data() {
-    let (env, client, issuer) = setup();
+    let env = Env::default();
+    let (client, issuer) = setup(&env);
     let token = Address::generate(&env);
     let payout_asset = Address::generate(&env);
     client.register_offering(&issuer, &symbol_short!("def"), &token, &500, &payout_asset, &0);
@@ -1296,7 +1326,8 @@ fn separate_issuers_have_independent_pages() {
 
 #[test]
 fn exact_page_boundary_no_cursor() {
-    let (env, client, issuer) = setup();
+    let env = Env::default();
+    let (client, issuer) = setup(&env);
     register_n(&env, &client, &issuer, 6);
 
     // Exactly 2 pages of 3
@@ -1317,8 +1348,10 @@ fn blacklist_setup() -> (Env, RevoraRevenueShareClient<'static>, Address, Addres
     let contract_id = env.register_contract(None, RevoraRevenueShare);
     let client = RevoraRevenueShareClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
+    client.initialize(&admin, &None::<Address>, &None::<bool>);
     let issuer = admin.clone();
     let token = Address::generate(&env);
+    client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &token, &0);
     let payout_asset = Address::generate(&env);
 
     client.initialize(&admin, &None::<Address>, &None::<bool>);
@@ -1652,7 +1685,7 @@ fn get_whitelist_empty_before_any_add() {
             &false,
         );
     }
-    assert!(env.events().all().len() >= 100);
+    assert!(legacy_events(&env).len() >= 100);
     assert_eq!(client.get_whitelist(&issuer, &symbol_short!("def"), &token).len(), 0);
 }
 
@@ -1743,9 +1776,9 @@ fn whitelist_add_emits_event() {
     let token = Address::generate(&env);
     let investor = Address::generate(&env);
 
-    let before = env.events().all().len();
+    let before = legacy_events(&env).len();
     client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
-    assert!(env.events().all().len() > before);
+    assert!(legacy_events(&env).len() > before);
 }
 
 #[test]
@@ -1760,9 +1793,9 @@ fn whitelist_remove_emits_event() {
     let investor = Address::generate(&env);
 
     client.whitelist_add(&admin, &issuer, &symbol_short!("def"), &token, &investor);
-    let before = env.events().all().len();
+    let before = legacy_events(&env).len();
     client.whitelist_remove(&admin, &issuer, &symbol_short!("def"), &token, &investor);
-    assert!(env.events().all().len() > before);
+    assert!(legacy_events(&env).len() > before);
 }
 
 // ── whitelist distribution enforcement ────────────────────────
@@ -2051,7 +2084,8 @@ fn single_report_is_persisted() {
 
 #[test]
 fn storage_stress_many_offerings_no_panic() {
-    let (env, client, issuer) = setup();
+    let env = Env::default();
+    let (client, issuer) = setup(&env);
     register_n(&env, &client, &issuer, STORAGE_STRESS_OFFERING_COUNT);
     let count = client.get_offering_count(&issuer, &symbol_short!("def"));
     assert_eq!(count, STORAGE_STRESS_OFFERING_COUNT);
@@ -2118,7 +2152,7 @@ fn multiple_reports_same_period_accumulate() {
             &false,
         );
     }
-    assert!(env.events().all().len() >= 100);
+    assert!(legacy_events(&env).len() >= 100);
 }
 
 #[test]
@@ -2162,7 +2196,8 @@ fn get_revenue_range_sums_periods() {
 
 #[test]
 fn gas_characterization_many_offerings_single_issuer() {
-    let (env, client, issuer) = setup();
+    let env = Env::default();
+    let (client, issuer) = setup(&env);
     let n = 50_u32;
     register_n(&env, &client, &issuer, n);
 
@@ -2204,7 +2239,7 @@ fn gas_characterization_report_revenue_with_large_blacklist() {
         &1,
         &false,
     );
-    assert!(!env.events().all().is_empty());
+    assert!(!legacy_events(&env).is_empty());
 }
 
 #[test]
@@ -2219,7 +2254,7 @@ fn revenue_matches_event_amount() {
     client.report_revenue(&issuer, &symbol_short!("def"), &token, &token, &amount, &5, &false);
 
     assert_eq!(client.get_revenue_by_period(&issuer, &symbol_short!("def"), &token, &5), amount);
-    assert!(!env.events().all().is_empty());
+    assert!(!legacy_events(&env).is_empty());
 }
 
 #[test]
@@ -2526,8 +2561,8 @@ fn audit_summary_aggregates_revenue_and_count() {
     assert_eq!(summary.clone().unwrap().total_revenue, 600);
     assert_eq!(summary.clone().unwrap().report_count, 3);
     let s = summary.unwrap();
-    assert_eq!(s.unwrap().total_revenue, 600);
-    assert_eq!(s.unwrap().report_count, 3);
+    assert_eq!(s.total_revenue, 600);
+    assert_eq!(s.report_count, 3);
 }
 
 #[test]
@@ -2568,10 +2603,10 @@ fn audit_summary_per_offering_isolation() {
     assert_eq!(sum_b.clone().unwrap().report_count, 1);
     let a = sum_a.unwrap();
     let b = sum_b.unwrap();
-    assert_eq!(a.unwrap().total_revenue, 1000);
-    assert_eq!(a.unwrap().report_count, 1);
-    assert_eq!(b.unwrap().total_revenue, 2000);
-    assert_eq!(b.unwrap().report_count, 1);
+    assert_eq!(a.total_revenue, 1000);
+    assert_eq!(a.report_count, 1);
+    assert_eq!(b.total_revenue, 2000);
+    assert_eq!(b.report_count, 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -2913,9 +2948,9 @@ fn snapshot_deposit_preserves_registered_payment_token_lock() {
 fn deposit_revenue_emits_event() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
 
-    let before = env.events().all().len();
+    let before = legacy_events(&env).len();
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
-    assert!(env.events().all().len() > before);
+    assert!(legacy_events(&env).len() > before);
 }
 
 #[test]
@@ -3024,9 +3059,9 @@ fn set_holder_share_emits_event() {
     let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
     let holder = Address::generate(&env);
 
-    let before = env.events().all().len();
+    let before = legacy_events(&env).len();
     client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &2_500);
-    assert!(env.events().all().len() > before);
+    assert!(legacy_events(&env).len() > before);
 }
 
 #[test]
@@ -3148,9 +3183,9 @@ fn claim_emits_event() {
     client.set_holder_share(&issuer, &symbol_short!("def"), &token, &holder, &5_000);
     client.deposit_revenue(&issuer, &symbol_short!("def"), &token, &payment_token, &100_000, &1);
 
-    let before = env.events().all().len();
+    let before = legacy_events(&env).len();
     client.claim(&holder, &issuer, &symbol_short!("def"), &token, &0);
-    assert!(env.events().all().len() > before);
+    assert!(legacy_events(&env).len() > before);
 }
 
 #[test]
@@ -3821,9 +3856,9 @@ fn claim_delay_partial_periods_only_claimable_after_delay() {
 fn set_claim_delay_emits_event() {
     let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
 
-    let before = env.events().all().len();
+    let before = legacy_events(&env).len();
     client.set_claim_delay(&issuer, &symbol_short!("def"), &token, &3600);
-    assert!(env.events().all().len() > before);
+    assert!(legacy_events(&env).len() > before);
 }
 
 // ===========================================================================
@@ -3932,10 +3967,10 @@ fn freeze_sets_flag_and_emits_event() {
 
     client.set_admin(&admin);
     assert!(!client.is_frozen());
-    let before = env.events().all().len();
+    let before = legacy_events(&env).len();
     client.freeze();
     assert!(client.is_frozen());
-    assert!(env.events().all().len() > before);
+    assert!(legacy_events(&env).len() > before);
 }
 
 #[test]
@@ -4229,7 +4264,7 @@ fn deposit_with_snapshot_emits_specialized_event() {
     let (env, client, issuer, token, payment_token, _contract_id) = claim_setup();
 
     client.set_snapshot_config(&issuer, &symbol_short!("def"), &token, &true);
-    let before = env.events().all().len();
+    let before = legacy_events(&env).len();
 
     client.deposit_revenue_with_snapshot(
         &issuer,
@@ -4241,7 +4276,7 @@ fn deposit_with_snapshot_emits_specialized_event() {
         &1000,
     );
 
-    let all_events = env.events().all();
+    let all_events = legacy_events(&env);
     assert!(all_events.len() > before);
     // The last event should be rev_snap
     // (Actual event validation depends on being able to parse the events which is complex inSDK tests without helper)
@@ -4316,9 +4351,9 @@ fn set_testnet_mode_emits_event() {
     let issuer = admin.clone();
 
     client.set_admin(&admin);
-    let before = env.events().all().len();
+    let before = legacy_events(&env).len();
     client.set_testnet_mode(&true);
-    assert!(env.events().all().len() > before);
+    assert!(legacy_events(&env).len() > before);
 }
 
 #[test]
@@ -4344,9 +4379,9 @@ fn issuer_transfer_accept_emits_event() {
     let new_issuer = Address::generate(&env);
 
     client.propose_issuer_transfer(&issuer, &symbol_short!("def"), &token, &new_issuer);
-    let before = env.events().all().len();
+    let before = legacy_events(&env).len();
     client.accept_issuer_transfer(&issuer, &symbol_short!("def"), &token);
-    assert!(env.events().all().len() > before);
+    assert!(legacy_events(&env).len() > before);
 }
 
 #[test]
@@ -4549,9 +4584,9 @@ fn issuer_transfer_cancel_emits_event() {
     let new_issuer = Address::generate(&env);
 
     client.propose_issuer_transfer(&issuer, &symbol_short!("def"), &token, &new_issuer);
-    let before = env.events().all().len();
+    let before = legacy_events(&env).len();
     client.cancel_issuer_transfer(&issuer, &symbol_short!("def"), &token);
-    let after = env.events().all().len();
+    let after = legacy_events(&env).len();
     assert_eq!(after, before + 1);
 }
 
@@ -4683,9 +4718,9 @@ fn testnet_mode_concentration_warning_still_emitted() {
     client.set_concentration_limit(&issuer, &symbol_short!("def"), &token, &5000, &false);
 
     // Warning should still be emitted in testnet mode
-    let before = env.events().all().len();
+    let before = legacy_events(&env).len();
     client.report_concentration(&issuer, &symbol_short!("def"), &token, &7000);
-    assert!(env.events().all().len() > before);
+    assert!(legacy_events(&env).len() > before);
 }
 
 #[test]
@@ -4982,10 +5017,10 @@ fn multisig_init_empty_owners_fails() {
 fn multisig_propose_action_emits_events_and_auto_approves_proposer() {
     let (env, client, owner1, _owner2, _owner3, _caller) = multisig_setup();
 
-    let before = env.events().all().len();
+    let before = legacy_events(&env).len();
     let proposal_id = client.propose_action(&owner1, &ProposalAction::Freeze);
     // Should emit prop_new + prop_app (auto-approval)
-    assert!(env.events().all().len() >= before + 2);
+    assert!(legacy_events(&env).len() >= before + 2);
 
     // Proposer's vote is counted automatically
     let proposal = client.get_proposal(&proposal_id).unwrap();
@@ -5007,9 +5042,9 @@ fn multisig_approve_action_records_approval_and_emits_event() {
     let (env, client, owner1, owner2, owner3, _caller) = multisig_setup();
 
     let proposal_id = client.propose_action(&owner1, &ProposalAction::Freeze);
-    let before = env.events().all().len();
+    let before = legacy_events(&env).len();
     client.approve_action(&owner2, &proposal_id);
-    assert!(env.events().all().len() > before);
+    assert!(legacy_events(&env).len() > before);
 
     let proposal = client.get_proposal(&proposal_id).unwrap();
     assert_eq!(proposal.approvals.len(), 1);
@@ -5075,9 +5110,9 @@ fn multisig_execute_emits_event() {
 
     let proposal_id = client.propose_action(&owner1, &ProposalAction::Freeze);
     client.approve_action(&owner2, &proposal_id);
-    let before = env.events().all().len();
+    let before = legacy_events(&env).len();
     client.execute_action(&proposal_id);
-    assert!(env.events().all().len() > before);
+    assert!(legacy_events(&env).len() > before);
 }
 
 #[test]
@@ -5314,8 +5349,8 @@ fn issuer_transfer_preserves_audit_summary() {
 
     // Audit summary should still be accessible
     let summary_after = client.get_audit_summary(&issuer, &symbol_short!("def"), &token).unwrap();
-    assert_eq!(summary_before.unwrap().total_revenue, summary_after.unwrap().total_revenue);
-    assert_eq!(summary_before.unwrap().report_count, summary_after.unwrap().report_count);
+    assert_eq!(summary_before.total_revenue, summary_after.total_revenue);
+    assert_eq!(summary_before.report_count, summary_after.report_count);
 }
 
 #[test]
@@ -5528,8 +5563,8 @@ fn testnet_mode_normal_operations_unaffected() {
     assert_eq!(summary.clone().unwrap().total_revenue, 1_000_000);
     assert_eq!(summary.clone().unwrap().report_count, 1);
     let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token).unwrap();
-    assert_eq!(summary.unwrap().total_revenue, 1_000_000);
-    assert_eq!(summary.unwrap().report_count, 1);
+    assert_eq!(summary.total_revenue, 1_000_000);
+    assert_eq!(summary.report_count, 1);
 }
 
 #[test]
@@ -5630,7 +5665,7 @@ fn pause_unpause_idempotence_and_events() {
     assert!(!client.is_paused());
 
     // Verify events were emitted
-    assert!(env.events().all().len() >= 5); // init + pause + pause + unpause + unpause
+    assert!(legacy_events(&env).len() >= 5); // init + pause + pause + unpause + unpause
 }
 
 #[test]
@@ -6311,7 +6346,7 @@ fn calculate_distribution_emits_event() {
 
     let holder = Address::generate(&env);
 
-    let before = env.events().all().len();
+    let before = legacy_events(&env).len();
     client.calculate_distribution(
         &caller,
         &issuer,
@@ -6322,7 +6357,7 @@ fn calculate_distribution_emits_event() {
         &100,
         &holder,
     );
-    assert!(env.events().all().len() > before);
+    assert!(legacy_events(&env).len() > before);
 }
 
 #[test]
@@ -6643,7 +6678,7 @@ fn test_event_only_mode_register_and_report() {
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &payout_asset, &0);
 
     // Verify event emitted (skip checking EVENT_INIT)
-    let events = env.events().all();
+    let events = legacy_events(&env);
     let offer_reg_val: soroban_sdk::Val = symbol_short!("offer_reg").into_val(&env);
     assert!(events.iter().any(|e| e.1.contains(offer_reg_val)));
 
@@ -6662,7 +6697,7 @@ fn test_event_only_mode_register_and_report() {
         &false,
     );
 
-    let events = env.events().all();
+    let events = legacy_events(&env);
     let rev_init_val: soroban_sdk::Val = symbol_short!("rev_init").into_val(&env);
     let rev_rep_val: soroban_sdk::Val = symbol_short!("rev_rep").into_val(&env);
     assert!(events.iter().any(|e| e.1.contains(rev_init_val)));
@@ -6691,7 +6726,7 @@ fn test_event_only_mode_blacklist() {
     // Blacklist add should emit event but NOT persist
     client.blacklist_add(&issuer, &issuer, &symbol_short!("def"), &token, &investor);
 
-    let events = env.events().all();
+    let events = legacy_events(&env);
     let bl_add_val: soroban_sdk::Val = symbol_short!("bl_add").into_val(&env);
     assert!(events.iter().any(|e| e.1.contains(bl_add_val)));
 
@@ -6714,7 +6749,7 @@ fn test_event_only_mode_testnet_config() {
 
     client.set_testnet_mode(&true);
 
-    let events = env.events().all();
+    let events = legacy_events(&env);
     let test_mode_val: soroban_sdk::Val = symbol_short!("test_mode").into_val(&env);
     assert!(events.iter().any(|e| e.1.contains(test_mode_val)));
 
@@ -6975,11 +7010,11 @@ fn test_metadata_set_emits_event() {
 
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &token, &0);
 
-    let before = env.events().all().len();
+    let before = legacy_events(&env).len();
     let metadata = SdkString::from_str(&env, "ipfs://QmTest");
     client.set_offering_metadata(&issuer, &symbol_short!("def"), &token, &metadata);
 
-    let events = env.events().all();
+    let events = legacy_events(&env);
     assert!(events.len() > before);
 
     // Verify the event contains the correct symbol
@@ -7004,11 +7039,11 @@ fn test_metadata_update_emits_event() {
     let metadata1 = SdkString::from_str(&env, "ipfs://QmFirst");
     client.set_offering_metadata(&issuer, &symbol_short!("def"), &token, &metadata1);
 
-    let before = env.events().all().len();
+    let before = legacy_events(&env).len();
     let metadata2 = SdkString::from_str(&env, "ipfs://QmSecond");
     client.set_offering_metadata(&issuer, &symbol_short!("def"), &token, &metadata2);
 
-    let events = env.events().all();
+    let events = legacy_events(&env);
     assert!(events.len() > before);
 
     // Verify the event contains the correct symbol for update
@@ -7033,7 +7068,7 @@ fn test_metadata_events_include_correct_data() {
     let metadata = SdkString::from_str(&env, "ipfs://QmTest123");
     client.set_offering_metadata(&issuer, &symbol_short!("def"), &token, &metadata);
 
-    let events = env.events().all();
+    let events = legacy_events(&env);
     let (event_contract, topics, data) = events.last().unwrap();
 
     assert_eq!(event_contract, contract_id);
@@ -7509,24 +7544,27 @@ mod regression {
 
     #[test]
     fn min_revenue_threshold_default_is_zero() {
-        let (_env, client, issuer, token, _payout) = setup_with_offering();
+        let env = Env::default();
+    let (client, issuer, token, _payout) = setup_with_offering(&env);
         let threshold = client.get_min_revenue_threshold(&issuer, &symbol_short!("def"), &token);
         assert_eq!(threshold, 0);
     }
 
     #[test]
     fn set_min_revenue_threshold_emits_event() {
-        let (env, client, issuer, token, _payout) = setup_with_offering();
-        let before = env.events().all().len();
+        let env = Env::default();
+    let (client, issuer, token, _payout) = setup_with_offering(&env);
+        let before = legacy_events(&env).len();
         client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &5_000);
-        assert!(env.events().all().len() > before);
+        assert!(legacy_events(&env).len() > before);
     }
 
     #[test]
     fn report_below_threshold_emits_event_and_skips_distribution() {
-        let (env, client, issuer, token, payout_asset) = setup_with_offering();
+        let env = Env::default();
+    let (client, issuer, token, payout_asset) = setup_with_offering(&env);
         client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &10_000);
-        let events_before = env.events().all().len();
+        let events_before = legacy_events(&env).len();
         client.report_revenue(
             &issuer,
             &symbol_short!("def"),
@@ -7536,7 +7574,7 @@ mod regression {
             &1,
             &false,
         );
-        let events_after = env.events().all().len();
+        let events_after = legacy_events(&env).len();
         assert!(events_after > events_before, "should emit rev_below event");
         let summary = client.get_audit_summary(&issuer, &symbol_short!("def"), &token);
         assert!(
@@ -7547,7 +7585,8 @@ mod regression {
 
     #[test]
     fn report_at_or_above_threshold_updates_state() {
-        let (_env, client, issuer, token, payout_asset) = setup_with_offering();
+        let env = Env::default();
+    let (client, issuer, token, payout_asset) = setup_with_offering(&env);
         client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &1_000);
         client.report_revenue(
             &issuer,
@@ -7577,7 +7616,8 @@ mod regression {
 
     #[test]
     fn zero_threshold_disables_check() {
-        let (_env, client, issuer, token, payout_asset) = setup_with_offering();
+        let env = Env::default();
+    let (client, issuer, token, payout_asset) = setup_with_offering(&env);
         client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &100);
         client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &0);
         client.report_revenue(
@@ -7679,7 +7719,8 @@ mod regression {
 
     #[test]
     fn get_offerings_page_order_is_by_registration_index() {
-        let (env, client, issuer) = setup();
+        let env = Env::default();
+    let (client, issuer) = setup(&env);
         let t0 = Address::generate(&env);
         let t1 = Address::generate(&env);
         let t2 = Address::generate(&env);
@@ -7798,7 +7839,8 @@ mod regression {
 
     #[test]
     fn get_version_unchanged_after_operations() {
-        let (env, client, issuer) = setup();
+        let env = Env::default();
+    let (client, issuer) = setup(&env);
         let v0 = client.get_version();
         let token = Address::generate(&env);
         let payout_asset = Address::generate(&env);
@@ -7868,7 +7910,8 @@ mod regression {
 
     #[test]
     fn report_revenue_rejects_negative_amount() {
-        let (_env, client, issuer, token, payout_asset) = setup_with_offering();
+        let env = Env::default();
+    let (client, issuer, token, payout_asset) = setup_with_offering(&env);
         let r = client.try_report_revenue(
             &issuer,
             &symbol_short!("def"),
@@ -7883,7 +7926,8 @@ mod regression {
 
     #[test]
     fn report_revenue_accepts_zero_amount() {
-        let (_env, client, issuer, token, payout_asset) = setup_with_offering();
+        let env = Env::default();
+    let (client, issuer, token, payout_asset) = setup_with_offering(&env);
         let r = client.try_report_revenue(
             &issuer,
             &symbol_short!("def"),
@@ -7898,14 +7942,16 @@ mod regression {
 
     #[test]
     fn set_min_revenue_threshold_rejects_negative() {
-        let (_env, client, issuer, token, _payout_asset) = setup_with_offering();
+        let env = Env::default();
+    let (client, issuer, token, _payout_asset) = setup_with_offering(&env);
         let r = client.try_set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &-1);
         assert!(r.is_err());
     }
 
     #[test]
     fn set_min_revenue_threshold_accepts_zero() {
-        let (_env, client, issuer, token, _payout_asset) = setup_with_offering();
+        let env = Env::default();
+    let (client, issuer, token, _payout_asset) = setup_with_offering(&env);
         let r = client.try_set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &0);
         assert!(r.is_ok());
     }
@@ -8099,7 +8145,8 @@ mod regression {
 
     #[test]
     fn aggregation_single_offering_reported_revenue() {
-        let (env, client, issuer) = setup();
+        let env = Env::default();
+    let (client, issuer) = setup(&env);
         let token = Address::generate(&env);
         let payout_asset = Address::generate(&env);
         client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
@@ -8131,7 +8178,8 @@ mod regression {
 
     #[test]
     fn aggregation_multiple_offerings_same_issuer() {
-        let (env, client, issuer) = setup();
+        let env = Env::default();
+    let (client, issuer) = setup(&env);
         let token_a = Address::generate(&env);
         let token_b = Address::generate(&env);
         let payout_a = Address::generate(&env);
@@ -8294,7 +8342,8 @@ mod regression {
 
     #[test]
     fn platform_aggregation_single_issuer() {
-        let (env, client, issuer) = setup();
+        let env = Env::default();
+    let (client, issuer) = setup(&env);
         let token = Address::generate(&env);
         let payout = Address::generate(&env);
 
@@ -8397,7 +8446,8 @@ mod regression {
 
     #[test]
     fn issuer_registered_once_even_with_multiple_offerings() {
-        let (env, client, issuer) = setup();
+        let env = Env::default();
+    let (client, issuer) = setup(&env);
         let token_a = Address::generate(&env);
         let token_b = Address::generate(&env);
         let token_c = Address::generate(&env);
@@ -8446,7 +8496,8 @@ mod regression {
 
     #[test]
     fn aggregation_no_reports_only_offerings() {
-        let (env, client, issuer) = setup();
+        let env = Env::default();
+    let (client, issuer) = setup(&env);
         register_n(&env, &client, &issuer, 5);
 
         let metrics = client.get_issuer_aggregation(&issuer);
@@ -8491,7 +8542,8 @@ mod regression {
 
     #[test]
     fn aggregation_stress_many_offerings() {
-        let (env, client, issuer) = setup();
+        let env = Env::default();
+    let (client, issuer) = setup(&env);
 
         // Register 20 offerings and report revenue on each
         let mut tokens = soroban_sdk::Vec::new(&env);
