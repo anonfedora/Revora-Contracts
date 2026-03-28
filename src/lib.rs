@@ -1275,16 +1275,6 @@ impl RevoraRevenueShare {
             (payout_asset.clone(), amount, period_id),
         );
 
-        // Audit log summary (#34): maintain per-offering total revenue and report count
-        let summary_key = DataKey::AuditSummary(offering_id.clone());
-        let mut summary: AuditSummary = env
-            .storage()
-            .persistent()
-            .get(&summary_key)
-            .unwrap_or(AuditSummary { total_revenue: 0, report_count: 0 });
-        summary.total_revenue = summary.total_revenue.saturating_add(amount);
-        summary.report_count = summary.report_count.saturating_add(1);
-        env.storage().persistent().set(&summary_key, &summary);
         // Optionally emit versioned v1 events for forward-compatible consumers
         if Self::is_event_versioning_enabled(env.clone()) {
             env.events().publish(
@@ -3191,22 +3181,41 @@ impl RevoraRevenueShare {
                 owners.push_back(new_owner);
                 env.storage().persistent().set(&DataKey::MultisigOwners, &owners);
             }
-            ProposalAction::RemoveOwner(old_owner) => {
-                let owners: Vec<Address> =
+            ProposalAction::RemoveOwner(addr) => {
+                let mut owners: Vec<Address> =
                     env.storage().persistent().get(&DataKey::MultisigOwners).unwrap();
+
+                // Guard 1: existence check — addr must currently be an owner
+                if !owners.contains(&addr) {
+                    return Err(RevoraError::NotAuthorized);
+                }
+
+                // Guard 2: threshold invariant — removal must not drop owner count below threshold
+                if (owners.len() - 1) < threshold {
+                    return Err(RevoraError::LimitReached);
+                }
+
+                // Remove addr from owners
                 let mut new_owners = Vec::new(&env);
                 for i in 0..owners.len() {
                     let owner = owners.get(i).unwrap();
-                    if owner != old_owner {
+                    if owner != addr {
                         new_owners.push_back(owner);
                     }
                 }
-                let threshold: u32 =
-                    env.storage().persistent().get(&DataKey::MultisigThreshold).unwrap();
-                if new_owners.len() < threshold || new_owners.is_empty() {
-                    return Err(RevoraError::LimitReached); // Would break threshold
-                }
-                env.storage().persistent().set(&DataKey::MultisigOwners, &new_owners);
+                owners = new_owners;
+
+                // Persist updated owners list
+                env.storage().persistent().set(&DataKey::MultisigOwners, &owners);
+
+                // Mark proposal executed and persist
+                proposal.executed = true;
+                env.storage().persistent().set(&key, &proposal);
+
+                // Emit prop_exe event with proposal ID (after state is persisted)
+                env.events().publish((EVENT_PROPOSAL_EXECUTED,), proposal.id);
+
+                return Ok(());
             }
         }
 
@@ -3993,7 +4002,9 @@ mod vesting_test;
 #[cfg(test)]
 mod test_utils;
 
+#[cfg(test)]
 mod chunking_tests;
+#[cfg(test)]
 mod test;
 mod test_auth;
 mod test_cross_contract;
