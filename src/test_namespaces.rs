@@ -90,11 +90,11 @@ fn test_cross_namespace_blacklist_isolation() {
 
     // Blacklist in NS 1
     client.blacklist_add(&issuer, &issuer, &ns_1, &token, &investor);
-    
+
     // Verify isolated
     assert!(client.is_blacklisted(&issuer, &ns_1, &token, &investor));
     assert!(!client.is_blacklisted(&issuer, &ns_2, &token, &investor));
-    
+
     assert_eq!(client.get_blacklist(&issuer, &ns_1, &token).len(), 1);
     assert_eq!(client.get_blacklist(&issuer, &ns_2, &token).len(), 0);
 }
@@ -130,13 +130,19 @@ fn test_unauthorized_issuer_access_fails() {
     client.register_offering(&issuer_real, &ns_1, &token, &1000, &token, &0);
 
     // Attacker tries to blacklist for real issuer's offering
-    // Note: mock_all_auths will allow the call to reach the contract, 
+    // Note: mock_all_auths will allow the call to reach the contract,
     // but the contract should check that issuer_attacker is not current_issuer.
-    
-    let res = client.try_blacklist_add(&issuer_attacker, &issuer_real, &ns_1, &token, &Address::generate(&env));
-    
+
+    let res = client.try_blacklist_add(
+        &issuer_attacker,
+        &issuer_real,
+        &ns_1,
+        &token,
+        &Address::generate(&env),
+    );
+
     // Should fail with NotAuthorized (#10) or OfferingNotFound (if we strictly check issuer in ID)
-    // Actually our implementation returns NotAuthorized if issuer matches but caller doesn't, 
+    // Actually our implementation returns NotAuthorized if issuer matches but caller doesn't,
     // but here the issuer_real in the ID matches the real one, but the caller is attacker.
     assert!(res.is_err());
 }
@@ -172,7 +178,6 @@ fn test_transfer_maintains_namespace_isolation() {
     assert!(res.is_err());
 }
 
-
 /// @dev Verifies that double-registration of the exact same (issuer, namespace, token) is rejected to prevent state clobbering.
 #[test]
 fn test_duplicate_registration_fails() {
@@ -185,7 +190,7 @@ fn test_duplicate_registration_fails() {
     let ns = symbol_short!("ns1");
 
     client.register_offering(&issuer, &ns, &token, &1000, &token, &0);
-    
+
     // Exact same registration should fail
     let res = client.try_register_offering(&issuer, &ns, &token, &1000, &token, &0);
     assert!(res.is_err());
@@ -206,7 +211,7 @@ fn test_aggregation_across_namespaces() {
 
     client.register_offering(&issuer, &ns_1, &token1, &1000, &token1, &0);
     client.register_offering(&issuer, &ns_2, &token2, &1000, &token2, &0);
-    
+
     // Report revenue in both namespaces
     client.report_revenue(&issuer, &ns_1, &token1, &token1, &50000, &1, &false);
     client.report_revenue(&issuer, &ns_2, &token2, &token2, &25000, &1, &false);
