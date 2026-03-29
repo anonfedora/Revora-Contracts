@@ -59,8 +59,7 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      - name: Test (feature tests — multisig owner removal safety)
-        run: cargo test --lib -- test_remove test_duplicate test_self_removal test_propose_self test_event_emitted test_no_event test_get_multisig test_execute_action_no_auth test_propose_requires test_approve_requires test_re_execute test_get_proposal test_threshold_not test_post_removal test_guard_order multisig_init multisig_propose multisig_approve multisig_execute multisig_add multisig_remove multisig_set multisig_freeze multisig_three multisig_multiple multisig_get multisig_non_owner multisig_duplicate
-
-      - name: Test (full suite — best effort, pre-existing aborts are known)
-        run: cargo test --lib || true
+      - name: Test
+        run: cargo test -- --test-threads=1
+        env:
+          RUST_BACKTRACE: full
