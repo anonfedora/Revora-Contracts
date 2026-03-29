@@ -301,15 +301,8 @@ fn negative_amount_rejected_before_period_id_check() {
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &token, &0);
 
     // Negative amount with valid period_id
-    let r = client.try_report_revenue(
-        &issuer,
-        &symbol_short!("def"),
-        &token,
-        &token,
-        &-1,
-        &5,
-        &false,
-    );
+    let r =
+        client.try_report_revenue(&issuer, &symbol_short!("def"), &token, &token, &-1, &5, &false);
     assert_eq!(r, Err(Ok(RevoraError::InvalidAmount)));
 }
 
@@ -323,15 +316,8 @@ fn zero_amount_accepted_by_report_revenue() {
     let token = Address::generate(&env);
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &token, &0);
 
-    let r = client.try_report_revenue(
-        &issuer,
-        &symbol_short!("def"),
-        &token,
-        &token,
-        &0,
-        &3,
-        &false,
-    );
+    let r =
+        client.try_report_revenue(&issuer, &symbol_short!("def"), &token, &token, &0, &3, &false);
     assert!(r.is_ok());
 }
 
@@ -412,22 +398,29 @@ fn period_id_isolated_across_offerings() {
     let token_b = Address::generate(&env);
     let (payment_token, _) = create_payment_token(&env);
 
-    client.register_offering(&issuer_a, &symbol_short!("def"), &token_a, &1_000, &payment_token, &0);
-    client.register_offering(&issuer_b, &symbol_short!("def"), &token_b, &1_000, &payment_token, &0);
+    client.register_offering(
+        &issuer_a,
+        &symbol_short!("def"),
+        &token_a,
+        &1_000,
+        &payment_token,
+        &0,
+    );
+    client.register_offering(
+        &issuer_b,
+        &symbol_short!("def"),
+        &token_b,
+        &1_000,
+        &payment_token,
+        &0,
+    );
 
     mint(&env, &payment_token, &issuer_a, 1_000_000);
     mint(&env, &payment_token, &issuer_b, 1_000_000);
 
     // Deposit period 5 for offering A
     client
-        .deposit_revenue(
-            &issuer_a,
-            &symbol_short!("def"),
-            &token_a,
-            &payment_token,
-            &1_000,
-            &5u64,
-        )
+        .deposit_revenue(&issuer_a, &symbol_short!("def"), &token_a, &payment_token, &1_000, &5u64)
         .unwrap();
 
     // Offering B period 5 must still be available (not yet deposited)
@@ -435,14 +428,7 @@ fn period_id_isolated_across_offerings() {
 
     // Deposit period 5 for offering B independently
     client
-        .deposit_revenue(
-            &issuer_b,
-            &symbol_short!("def"),
-            &token_b,
-            &payment_token,
-            &2_000,
-            &5u64,
-        )
+        .deposit_revenue(&issuer_b, &symbol_short!("def"), &token_b, &payment_token, &2_000, &5u64)
         .unwrap();
 
     assert_eq!(client.get_period_count(&issuer_a, &symbol_short!("def"), &token_a), 1);
@@ -492,15 +478,8 @@ fn frozen_contract_rejects_report_revenue() {
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &token, &0);
     client.freeze();
 
-    let r = client.try_report_revenue(
-        &issuer,
-        &symbol_short!("def"),
-        &token,
-        &token,
-        &100,
-        &1,
-        &false,
-    );
+    let r =
+        client.try_report_revenue(&issuer, &symbol_short!("def"), &token, &token, &100, &1, &false);
     assert_eq!(r, Err(Ok(RevoraError::ContractFrozen)));
 }
 

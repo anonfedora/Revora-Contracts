@@ -175,11 +175,7 @@ impl RevoraVesting {
         );
         env.events().publish(
             (EVENT_VESTING_CANCELLED_V1, admin, beneficiary),
-            (
-                VESTING_EVENT_SCHEMA_VERSION,
-                schedule_index,
-                schedule.token.clone(),
-            ),
+            (VESTING_EVENT_SCHEMA_VERSION, schedule_index, schedule.token.clone()),
         );
         Ok(())
     }
@@ -241,12 +237,7 @@ impl RevoraVesting {
         );
         env.events().publish(
             (EVENT_VESTING_CLAIMED_V1, beneficiary.clone(), admin),
-            (
-                VESTING_EVENT_SCHEMA_VERSION,
-                schedule_index,
-                schedule.token,
-                claimable,
-            ),
+            (VESTING_EVENT_SCHEMA_VERSION, schedule_index, schedule.token, claimable),
         );
         Ok(claimable)
     }
@@ -321,9 +312,11 @@ impl RevoraVesting {
         schedule_index: u32,
         claim_index: u32,
     ) -> Option<(u64, i128)> {
-        env.storage()
-            .persistent()
-            .get(&VestingDataKey::ClaimRecord(admin, schedule_index, claim_index))
+        env.storage().persistent().get(&VestingDataKey::ClaimRecord(
+            admin,
+            schedule_index,
+            claim_index,
+        ))
     }
 
     /// Query a schedule by admin and index.
