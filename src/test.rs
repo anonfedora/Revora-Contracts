@@ -7885,12 +7885,81 @@ mod regression {
     #[test]
     fn get_version_unchanged_after_operations() {
         let env = Env::default();
-    let (client, issuer) = setup(&env);
+        let (client, issuer) = setup(&env);
         let v0 = client.get_version();
         let token = Address::generate(&env);
         let payout_asset = Address::generate(&env);
         client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
         assert_eq!(client.get_version(), v0);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Versioned Migration Hooks (#44)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_migrate_success() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let cid = env.register_contract(None, RevoraRevenueShare);
+        let client = RevoraRevenueShareClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+        client.initialize(&admin, &None, &None);
+
+        // Initial deployed version should be 0 (since we didn't update initialize)
+        assert_eq!(client.get_deployed_version(), 0);
+
+        // Migrate to current CONTRACT_VERSION
+        let result = client.migrate();
+        assert_eq!(result, crate::CONTRACT_VERSION);
+        assert_eq!(client.get_deployed_version(), crate::CONTRACT_VERSION);
+    }
+
+    #[test]
+    #[should_panic(expected = "HostError: Error(Contract, #19)")]
+    fn test_migrate_unauthorized() {
+        let env = Env::default();
+        let cid = env.register_contract(None, RevoraRevenueShare);
+        let client = RevoraRevenueShareClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+        client.initialize(&admin, &None, &None);
+
+        // Call migrate without auth (will fail because mock_all_auths is not set)
+        client.migrate();
+    }
+
+    #[test]
+    fn test_migrate_already_at_target() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let cid = env.register_contract(None, RevoraRevenueShare);
+        let client = RevoraRevenueShareClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+        client.initialize(&admin, &None, &None);
+
+        client.migrate();
+        assert_eq!(client.get_deployed_version(), crate::CONTRACT_VERSION);
+
+        // Try to migrate again
+        let result = client.try_migrate();
+        assert_eq!(result, Err(Ok(RevoraError::AlreadyAtTargetVersion)));
+    }
+
+    #[test]
+    fn test_migrate_respects_freeze() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let cid = env.register_contract(None, RevoraRevenueShare);
+        let client = RevoraRevenueShareClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+        client.initialize(&admin, &None, &None);
+
+        // Freeze contract
+        client.set_frozen(&true);
+
+        // Try to migrate
+        let result = client.try_migrate();
+        assert_eq!(result, Err(Ok(RevoraError::ContractFrozen)));
     }
 
     // ---------------------------------------------------------------------------

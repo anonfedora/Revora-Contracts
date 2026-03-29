@@ -78,6 +78,14 @@ pub enum RevoraError {
     SignerKeyNotRegistered = 29,
     /// Cross-contract token transfer failed.
     TransferFailed = 30,
+    /// Contract is already at the target version; no migration needed.
+    AlreadyAtTargetVersion = 31,
+    /// Target version is lower than the current deployed version.
+    MigrationDowngradeNotAllowed = 32,
+    /// Admin rotation failed: new admin cannot be the same as current.
+    AdminRotationSameAddress = 33,
+    /// Admin rotation failed: another rotation is already pending.
+    AdminRotationPending = 34,
 }
 
 // ── Event symbols ────────────────────────────────────────────
@@ -539,6 +547,9 @@ pub enum DataKey {
     StressDataEntry(Address, u32),
     /// Tracks total amount of dummy data allocated per admin.
     StressDataCount(Address),
+
+    /// Deployed contract version for migration tracking.
+    DeployedVersion,
 }
 
 /// Maximum number of offerings returned in a single page.
@@ -5161,6 +5172,87 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
     ) -> i128 {
         let fee_bps = Self::get_effective_fee_bps(env, issuer, namespace, token, asset) as i128;
         (amount * fee_bps).checked_div(BPS_DENOMINATOR).unwrap_or(0)
+    }
+
+    /// Migrate the contract state to the current CONTRACT_VERSION.
+    ///
+    /// This function is intended to be called by the admin after a WASM upgrade.
+    /// It executes versioned migration hooks sequentially from the last recorded version
+    /// to the current `CONTRACT_VERSION`.
+    ///
+    /// Security properties:
+    /// - Only the current admin can call this.
+    /// - Respects the contract freeze state.
+    /// - Prevents downgrades or re-running the same migration.
+    /// - Updates `DataKey::DeployedVersion` only on success.
+    pub fn migrate(env: Env) -> Result<u32, RevoraError> {
+        Self::require_not_frozen(&env)?;
+
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RevoraError::NotInitialized)?;
+
+        admin.require_auth();
+
+        let stored_version = env
+            .storage()
+            .persistent()
+            .get(&DataKey::DeployedVersion)
+            .unwrap_or(0u32);
+
+        if stored_version == CONTRACT_VERSION {
+            return Err(RevoraError::AlreadyAtTargetVersion);
+        }
+
+        if stored_version > CONTRACT_VERSION {
+            return Err(RevoraError::MigrationDowngradeNotAllowed);
+        }
+
+        // Run migration hooks sequentially
+        for version in (stored_version + 1)..=CONTRACT_VERSION {
+            Self::run_migration_hook(&env, version)?;
+        }
+
+        env.storage().persistent().set(&DataKey::DeployedVersion, &CONTRACT_VERSION);
+
+        env.events().publish(
+            (symbol_short!("migrated"), admin),
+            (stored_version, CONTRACT_VERSION),
+        );
+
+        Ok(CONTRACT_VERSION)
+    }
+
+    /// Internal helper to run migration logic for a specific version bump.
+    fn run_migration_hook(env: &Env, version: u32) -> Result<(), RevoraError> {
+        match version {
+            1 => {
+                // Initial version setup if needed (usually handled by initialize)
+            }
+            2 => {
+                // Example v2 migration logic
+            }
+            3 => {
+                // Example v3 migration logic
+            }
+            4 => {
+                // Example v4 migration logic
+            }
+            _ => {
+                // Future versions will be handled here
+            }
+        }
+        Ok(())
+    }
+
+    /// Return the current deployed version of the contract state.
+    pub fn get_deployed_version(env: Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::DeployedVersion)
+            .unwrap_or(0)
     }
 
     /// Return the current contract version (#23). Used for upgrade compatibility and migration.
