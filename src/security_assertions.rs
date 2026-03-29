@@ -21,7 +21,6 @@
 /// - Assertions are deterministic (no state-dependent randomness)
 /// - Assertions are testable in isolation
 /// - Clear error messages aid debugging and forensic analysis
-
 use crate::RevoraError;
 use soroban_sdk::{Address, Env};
 
@@ -527,10 +526,7 @@ pub mod abort_handling {
     ) -> Result<(), String> {
         match result {
             Err(actual) if actual == expected_error => Ok(()),
-            Err(actual) => Err(format!(
-                "Expected {:?} but got {:?}",
-                expected_error, actual
-            )),
+            Err(actual) => Err(format!("Expected {:?} but got {:?}", expected_error, actual)),
             Ok(ok) => Err(format!(
                 "Expected error {:?} but operation succeeded: {:?}",
                 expected_error, ok
@@ -748,10 +744,7 @@ mod tests {
 
         #[test]
         fn test_safe_add_overflow() {
-            assert_eq!(
-                safe_math::safe_add(i128::MAX, 1),
-                Err(RevoraError::LimitReached)
-            );
+            assert_eq!(safe_math::safe_add(i128::MAX, 1), Err(RevoraError::LimitReached));
         }
 
         #[test]
@@ -761,10 +754,7 @@ mod tests {
 
         #[test]
         fn test_safe_sub_underflow() {
-            assert_eq!(
-                safe_math::safe_sub(i128::MIN, 1),
-                Err(RevoraError::LimitReached)
-            );
+            assert_eq!(safe_math::safe_sub(i128::MIN, 1), Err(RevoraError::LimitReached));
         }
 
         #[test]
@@ -774,10 +764,7 @@ mod tests {
 
         #[test]
         fn test_safe_mul_overflow() {
-            assert_eq!(
-                safe_math::safe_mul(i128::MAX, 2),
-                Err(RevoraError::LimitReached)
-            );
+            assert_eq!(safe_math::safe_mul(i128::MAX, 2), Err(RevoraError::LimitReached));
         }
 
         #[test]
@@ -787,10 +774,7 @@ mod tests {
 
         #[test]
         fn test_safe_div_by_zero() {
-            assert_eq!(
-                safe_math::safe_div(1_000, 0),
-                Err(RevoraError::LimitReached)
-            );
+            assert_eq!(safe_math::safe_div(1_000, 0), Err(RevoraError::LimitReached));
         }
 
         #[test]
@@ -862,9 +846,7 @@ mod tests {
 
         #[test]
         fn test_is_recoverable_error_offering_not_found() {
-            assert!(abort_handling::is_recoverable_error(
-                &RevoraError::OfferingNotFound
-            ));
+            assert!(abort_handling::is_recoverable_error(&RevoraError::OfferingNotFound));
         }
 
         #[test]

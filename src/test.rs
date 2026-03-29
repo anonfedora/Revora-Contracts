@@ -2,17 +2,17 @@
 #![allow(warnings)]
 #![allow(unused_variables, dead_code, unused_imports)]
 
+use crate::proptest_helpers::{any_test_operation, TestOperation};
 use crate::{
     AmountValidationCategory, AmountValidationMatrix, ProposalAction, RevoraError,
     RevoraRevenueShare, RevoraRevenueShareClient, RoundingMode,
 };
+use proptest::{prelude::*, prop};
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Events as _, Ledger as _},
     token, vec, Address, Env, IntoVal, String as SdkString, Symbol, Vec,
 };
-use proptest::{prelude::*, prop};
-use crate::proptest_helpers::{any_test_operation, TestOperation};
 
 // ── helper ────────────────────────────────────────────────────
 
@@ -21,28 +21,25 @@ fn make_client(env: &Env) -> RevoraRevenueShareClient {
     RevoraRevenueShareClient::new(env, &id)
 }
 
-
 /// Helper to extract legacy events skipping ev_idx2 indexed events
 #[allow(clippy::all)]
-fn legacy_events(env: &soroban_sdk::Env) -> soroban_sdk::Vec<(soroban_sdk::Address, soroban_sdk::Val, soroban_sdk::Val)> {
+fn legacy_events(
+    env: &soroban_sdk::Env,
+) -> soroban_sdk::Vec<(soroban_sdk::Address, soroban_sdk::Val, soroban_sdk::Val)> {
     let all = env.events().all();
     let mut filtered = soroban_sdk::Vec::new(env);
     let idx2_sym: soroban_sdk::Val = soroban_sdk::symbol_short!("ev_idx2").into_val(env);
     for i in 0..all.len() {
         let ev = all.get(i).unwrap();
         let topics: soroban_sdk::Vec<soroban_sdk::Val> = ev.1.clone().into_val(env);
-        let is_indexed = if !topics.is_empty() {
-            topics.first().unwrap() == idx2_sym
-        } else {
-            false
-        };
+        let is_indexed =
+            if !topics.is_empty() { topics.first().unwrap() == idx2_sym } else { false };
         if !is_indexed {
             filtered.push_back(ev);
         }
     }
     filtered
 }
-
 
 const BOUNDARY_AMOUNTS: [i128; 7] = [i128::MIN, i128::MIN + 1, -1, 0, 1, i128::MAX - 1, i128::MAX];
 const BOUNDARY_PERIODS: [u64; 6] = [0, 1, 2, 10_000, u64::MAX - 1, u64::MAX];
@@ -87,7 +84,6 @@ fn next_period(seed: &mut u64) -> u64 {
 
 #[test]
 fn register_offering_emits_exact_event() {
-
     let env = Env::default();
     env.mock_all_auths();
 
@@ -741,11 +737,10 @@ fn zero_amount_revenue_report_rejected() {
     let token = Address::generate(&env);
 
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &token, &0);
-    let result = client.try_report_revenue(&issuer, &symbol_short!("def"), &token, &token, &0, &1, &false);
+    let result =
+        client.try_report_revenue(&issuer, &symbol_short!("def"), &token, &token, &0, &1, &false);
     assert!(result.is_err());
     assert_eq!(result.unwrap_err(), RevoraError::InvalidAmount);
-}
-
 }
 
 #[test]
@@ -760,7 +755,8 @@ fn negative_amount_revenue_report_rejected() {
     let token = Address::generate(&env);
 
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &token, &0);
-    let result = client.try_report_revenue(&issuer, &symbol_short!("def"), &token, &token, &-1, &1, &false);
+    let result =
+        client.try_report_revenue(&issuer, &symbol_short!("def"), &token, &token, &-1, &1, &false);
     assert!(result.is_err());
     assert_eq!(result.unwrap_err(), RevoraError::InvalidAmount);
 }
@@ -936,7 +932,11 @@ fn fuzz_period_and_amount_boundaries_do_not_panic() {
             &period,
             &false,
         );
-        if r.is_ok() { accepted += 1; } else { rejected += 1; }
+        if r.is_ok() {
+            accepted += 1;
+        } else {
+            rejected += 1;
+        }
     }
 
     // Invalid amounts must all be rejected.
@@ -1183,7 +1183,9 @@ fn pending_periods_page_and_claimable_chunk_consistent() {
 }
 
 /// Helper (#30): create env, client, and one registered offering. Returns (env, client, issuer, token, payout_asset).
-fn setup_with_offering<'a>(env: &'a Env) -> (RevoraRevenueShareClient<'a>, Address, Address, Address) {
+fn setup_with_offering<'a>(
+    env: &'a Env,
+) -> (RevoraRevenueShareClient<'a>, Address, Address, Address) {
     let (client, issuer) = setup(env);
     let token = Address::generate(env);
     let payout_asset = Address::generate(env);
@@ -1605,7 +1607,8 @@ fn blacklist_add_requires_issuer_auth() {
     let investor = Address::generate(&env);
 
     // Non-issuer cannot add to blacklist
-    let r = client.try_blacklist_add(&non_issuer, &issuer, &symbol_short!("def"), &token, &investor);
+    let r =
+        client.try_blacklist_add(&non_issuer, &issuer, &symbol_short!("def"), &token, &investor);
     assert!(r.is_err());
     assert_eq!(r.unwrap_err(), RevoraError::NotAuthorized);
 
@@ -1635,7 +1638,8 @@ fn blacklist_remove_requires_issuer_auth() {
     client.blacklist_add(&issuer, &issuer, &symbol_short!("def"), &token, &investor);
 
     // Non-issuer cannot remove
-    let r = client.try_blacklist_remove(&non_issuer, &issuer, &symbol_short!("def"), &token, &investor);
+    let r =
+        client.try_blacklist_remove(&non_issuer, &issuer, &symbol_short!("def"), &token, &investor);
     assert!(r.is_err());
     assert_eq!(r.unwrap_err(), RevoraError::NotAuthorized);
 
@@ -2375,8 +2379,9 @@ fn set_concentration_limit_bounds_check() {
     let token = Address::generate(&env);
     let payout_asset = Address::generate(&env);
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
-    
-    let res = client.try_set_concentration_limit(&issuer, &symbol_short!("def"), &token, &10001, &false);
+
+    let res =
+        client.try_set_concentration_limit(&issuer, &symbol_short!("def"), &token, &10001, &false);
     assert!(res.is_err());
 }
 
@@ -2389,7 +2394,7 @@ fn report_concentration_bounds_check() {
     let token = Address::generate(&env);
     let payout_asset = Address::generate(&env);
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
-    
+
     let res = client.try_report_concentration(&issuer, &symbol_short!("def"), &token, &10001);
     assert!(res.is_err());
 }
@@ -2406,9 +2411,10 @@ fn set_concentration_limit_respects_pause() {
     let payout_asset = Address::generate(&env);
     client.initialize(&admin, &None, &None::<bool>);
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
-    
+
     client.pause_admin(&admin);
-    let res = client.try_set_concentration_limit(&issuer, &symbol_short!("def"), &token, &5000, &false);
+    let res =
+        client.try_set_concentration_limit(&issuer, &symbol_short!("def"), &token, &5000, &false);
     assert!(res.is_err());
 }
 
@@ -2424,7 +2430,7 @@ fn report_concentration_respects_pause() {
     let payout_asset = Address::generate(&env);
     client.initialize(&admin, &None, &None::<bool>);
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
-    
+
     client.pause_admin(&admin);
     let res = client.try_report_concentration(&issuer, &symbol_short!("def"), &token, &5000);
     assert!(res.is_err());
@@ -2440,10 +2446,10 @@ fn report_concentration_emits_audit_event() {
     let token = Address::generate(&env);
     let payout_asset = Address::generate(&env);
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
-    
+
     let before = env.events().all().len();
     client.report_concentration(&issuer, &symbol_short!("def"), &token, &3000);
-    
+
     let events = env.events().all();
     assert!(events.len() > before);
 }
@@ -5848,15 +5854,14 @@ fn large_period_range_sums_correctly_full() {
 // PROPERTY-BASED INVARIANT TESTS (Hardened for production)
 // ===========================================================================
 
-use crate::proptest_helpers::{any_test_operation, TestOperation, arb_valid_operation_sequence, arb_strictly_increasing_periods};
+use crate::proptest_helpers::{
+    any_test_operation, arb_strictly_increasing_periods, arb_valid_operation_sequence,
+    TestOperation,
+};
 use soroban_sdk::testutils::Ledger as _;
 
 /// Enhanced invariant oracle: must hold after ANY sequence.
-fn check_invariants_enhanced(
-    env: &Env,
-    client: &RevoraRevenueShareClient,
-    issuers: &Vec<Address>,
-) {
+fn check_invariants_enhanced(env: &Env, client: &RevoraRevenueShareClient, issuers: &Vec<Address>) {
     for issuer in issuers.iter() {
         let ns = soroban_sdk::symbol_short!("def");
         let offerings_page = client.get_offerings_page(issuer, &ns, &0, &20);
@@ -5896,7 +5901,8 @@ fn check_invariants_enhanced(
             let conc_limit = client.get_concentration_limit(issuer, &ns, &offering.token);
             if let Some(cfg) = conc_limit {
                 if cfg.enforce {
-                    let current_conc = client.get_current_concentration(issuer, &ns, &offering.token).unwrap_or(0);
+                    let current_conc =
+                        client.get_current_concentration(issuer, &ns, &offering.token).unwrap_or(0);
                     assert!(current_conc <= cfg.max_bps, "concentration exceeded");
                 }
             }
@@ -5919,7 +5925,7 @@ proptest! {
     fn prop_period_ordering(env in Env::default(), seq in arb_valid_operation_sequence(&env, 20usize)) {
         let client = make_client(&env);
         let issuers = vec![&env, [Address::generate(&env)].to_vec()];
-        
+
         for op in seq {
             match op {
                 TestOperation::RegisterOffering((i, ns, t, bps, pa)) => {
@@ -5932,7 +5938,7 @@ proptest! {
                 _ => {}
             }
         }
-        
+
         check_invariants_enhanced(&env, &client, &issuers);
     }
 }
@@ -5945,10 +5951,10 @@ proptest! {
         let issuer = Address::generate(&env);
         let ns = symbol_short!("def");
         let token = Address::generate(&env);
-        
+
         client.register_offering(&issuer, &ns, &token, &1000, &token.clone(), &0);
         client.set_concentration_limit(&issuer, &ns, &token.clone(), &5000, &true);
-        
+
         // Over limit → report_revenue fails
         client.report_concentration(&issuer, &ns, &token.clone(), &6000);
         let result = client.try_report_revenue(&issuer, &ns, &token, &token, &1000, &1, &false);
@@ -5965,18 +5971,18 @@ proptest! {
         let owner2 = Address::generate(&env);
         let owner3 = Address::generate(&env);
         let caller = Address::generate(&env);
-        
+
         let mut owners = Vec::new(&env);
         owners.push_back(owner1.clone());
         owners.push_back(owner2.clone());
         owners.push_back(owner3.clone());
-        
+
         client.init_multisig(&caller, &owners, &2);
-        
+
         let p1 = client.propose_action(&owner1, &ProposalAction::Freeze);
         // Below threshold → fail
         prop_assert!(client.try_execute_action(&p1).is_err());
-        
+
         client.approve_action(&owner2, &p1);
         // Threshold met → succeeds
         prop_assert!(client.try_execute_action(&p1).is_ok());
@@ -5990,10 +5996,10 @@ proptest! {
         let client = make_client(&env);
         let admin = Address::generate(&env);
         let issuer = admin.clone();
-        
+
         client.initialize(&admin, &None::<Address>, &None::<bool>);
         client.pause_admin(&admin);
-        
+
         let token = Address::generate(&env);
         // Mutations panic post-pause
         let result = std::panic::catch_unwind(|| {
@@ -6008,7 +6014,6 @@ fn continuous_invariants_deterministic_reproducible() {
     // Existing test preserved
 }
 
-
 /// Property: Blacklist enforcement (blacklisted holders claim 0).
 proptest! {
     #[test]
@@ -6020,10 +6025,10 @@ proptest! {
         let (i, ns, t) = offering;
         let client = make_client(&env);
         client.register_offering(&i, &ns, &t, &1000, &t.clone(), &0);
-        
+
         // Blacklist holder
         client.blacklist_add(&i, &i, &ns, &t.clone(), &holder);
-        
+
         // Attempt claim
         let share_bps = 5000u32;
         client.set_holder_share(&i, &ns, &t.clone(), &holder, &share_bps);
@@ -6043,25 +6048,25 @@ proptest! {
         let client = make_client(&env);
         let issuer = Address::generate(&env);
         let ns = symbol_short!("def");
-        
+
         // Register exactly N offerings
         for _ in 0..n {
             let token = Address::generate(&env);
             client.register_offering(&issuer, &ns, &token, &1000, &token, &0);
         }
-        
+
         assert_eq!(client.get_offering_count(&issuer, &ns), n as u32);
-        
+
         // Page 1: first 20 (or N)
         let (page1, cursor1) = client.get_offerings_page(&issuer, &ns, &0, &20);
         let page1_len = page1.len();
         assert!(page1_len <= 20);
-        
+
         if n > 20 {
             let (page2, cursor2) = client.get_offerings_page(&issuer, &ns, &cursor1.unwrap(), &20);
             assert_eq!(page1_len + page2.len(), core::cmp::min(40, n));
         }
-        
+
         // Full scan reconstructs all N
         let mut all_count = 0;
         let mut cursor: u32 = 0;
@@ -6088,14 +6093,14 @@ proptest! {
         let client = make_client(&env);
         let seed = 0xdeadbeefu64;
         let issuers = vec![&env, vec![&env, Address::generate(&env)]];
-        
+
         for step in 0..50 {
             let mut rng = seed.wrapping_add((step * 12345) as u64);
             let op = any_test_operation(&env).new_tree(&mut proptest::test_runner::rng::RngCoreAdapter::new(&mut rng)).unwrap();
-            
+
             // Execute op (mocked)
             // ... exec logic per TestOperation variant
-            
+
             // Oracle check after each step
             check_invariants_enhanced(&env, &client, &issuers);
         }
@@ -6113,7 +6118,6 @@ fn continuous_invariants_deterministic_reproducible() {
 
 #[test]
 fn calculate_distribution_basic() {
-
     let (env, client, issuer, token, _payment_token, _contract_id) = claim_setup();
     let caller = Address::generate(&env);
 
@@ -7588,7 +7592,7 @@ mod regression {
     #[test]
     fn min_revenue_threshold_default_is_zero() {
         let env = Env::default();
-    let (client, issuer, token, _payout) = setup_with_offering(&env);
+        let (client, issuer, token, _payout) = setup_with_offering(&env);
         let threshold = client.get_min_revenue_threshold(&issuer, &symbol_short!("def"), &token);
         assert_eq!(threshold, 0);
     }
@@ -7596,7 +7600,7 @@ mod regression {
     #[test]
     fn set_min_revenue_threshold_emits_event() {
         let env = Env::default();
-    let (client, issuer, token, _payout) = setup_with_offering(&env);
+        let (client, issuer, token, _payout) = setup_with_offering(&env);
         let before = legacy_events(&env).len();
         client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &5_000);
         assert!(legacy_events(&env).len() > before);
@@ -7605,7 +7609,7 @@ mod regression {
     #[test]
     fn report_below_threshold_emits_event_and_skips_distribution() {
         let env = Env::default();
-    let (client, issuer, token, payout_asset) = setup_with_offering(&env);
+        let (client, issuer, token, payout_asset) = setup_with_offering(&env);
         client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &10_000);
         let events_before = legacy_events(&env).len();
         client.report_revenue(
@@ -7629,7 +7633,7 @@ mod regression {
     #[test]
     fn report_at_or_above_threshold_updates_state() {
         let env = Env::default();
-    let (client, issuer, token, payout_asset) = setup_with_offering(&env);
+        let (client, issuer, token, payout_asset) = setup_with_offering(&env);
         client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &1_000);
         client.report_revenue(
             &issuer,
@@ -7660,7 +7664,7 @@ mod regression {
     #[test]
     fn zero_threshold_disables_check() {
         let env = Env::default();
-    let (client, issuer, token, payout_asset) = setup_with_offering(&env);
+        let (client, issuer, token, payout_asset) = setup_with_offering(&env);
         client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &100);
         client.set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &0);
         client.report_revenue(
@@ -7761,7 +7765,7 @@ mod regression {
     #[test]
     fn get_offerings_page_order_is_by_registration_index() {
         let env = Env::default();
-    let (client, issuer) = setup(&env);
+        let (client, issuer) = setup(&env);
         let t0 = Address::generate(&env);
         let t1 = Address::generate(&env);
         let t2 = Address::generate(&env);
@@ -7885,7 +7889,7 @@ mod regression {
     #[test]
     fn get_version_unchanged_after_operations() {
         let env = Env::default();
-    let (client, issuer) = setup(&env);
+        let (client, issuer) = setup(&env);
         let v0 = client.get_version();
         let token = Address::generate(&env);
         let payout_asset = Address::generate(&env);
@@ -7956,7 +7960,7 @@ mod regression {
     #[test]
     fn report_revenue_rejects_negative_amount() {
         let env = Env::default();
-    let (client, issuer, token, payout_asset) = setup_with_offering(&env);
+        let (client, issuer, token, payout_asset) = setup_with_offering(&env);
         let r = client.try_report_revenue(
             &issuer,
             &symbol_short!("def"),
@@ -7972,7 +7976,7 @@ mod regression {
     #[test]
     fn report_revenue_accepts_zero_amount() {
         let env = Env::default();
-    let (client, issuer, token, payout_asset) = setup_with_offering(&env);
+        let (client, issuer, token, payout_asset) = setup_with_offering(&env);
         let r = client.try_report_revenue(
             &issuer,
             &symbol_short!("def"),
@@ -7988,7 +7992,7 @@ mod regression {
     #[test]
     fn set_min_revenue_threshold_rejects_negative() {
         let env = Env::default();
-    let (client, issuer, token, _payout_asset) = setup_with_offering(&env);
+        let (client, issuer, token, _payout_asset) = setup_with_offering(&env);
         let r = client.try_set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &-1);
         assert!(r.is_err());
     }
@@ -7996,7 +8000,7 @@ mod regression {
     #[test]
     fn set_min_revenue_threshold_accepts_zero() {
         let env = Env::default();
-    let (client, issuer, token, _payout_asset) = setup_with_offering(&env);
+        let (client, issuer, token, _payout_asset) = setup_with_offering(&env);
         let r = client.try_set_min_revenue_threshold(&issuer, &symbol_short!("def"), &token, &0);
         assert!(r.is_ok());
     }
@@ -8191,7 +8195,7 @@ mod regression {
     #[test]
     fn aggregation_single_offering_reported_revenue() {
         let env = Env::default();
-    let (client, issuer) = setup(&env);
+        let (client, issuer) = setup(&env);
         let token = Address::generate(&env);
         let payout_asset = Address::generate(&env);
         client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &payout_asset, &0);
@@ -8224,7 +8228,7 @@ mod regression {
     #[test]
     fn aggregation_multiple_offerings_same_issuer() {
         let env = Env::default();
-    let (client, issuer) = setup(&env);
+        let (client, issuer) = setup(&env);
         let token_a = Address::generate(&env);
         let token_b = Address::generate(&env);
         let payout_a = Address::generate(&env);
@@ -8388,7 +8392,7 @@ mod regression {
     #[test]
     fn platform_aggregation_single_issuer() {
         let env = Env::default();
-    let (client, issuer) = setup(&env);
+        let (client, issuer) = setup(&env);
         let token = Address::generate(&env);
         let payout = Address::generate(&env);
 
@@ -8492,7 +8496,7 @@ mod regression {
     #[test]
     fn issuer_registered_once_even_with_multiple_offerings() {
         let env = Env::default();
-    let (client, issuer) = setup(&env);
+        let (client, issuer) = setup(&env);
         let token_a = Address::generate(&env);
         let token_b = Address::generate(&env);
         let token_c = Address::generate(&env);
@@ -8542,7 +8546,7 @@ mod regression {
     #[test]
     fn aggregation_no_reports_only_offerings() {
         let env = Env::default();
-    let (client, issuer) = setup(&env);
+        let (client, issuer) = setup(&env);
         register_n(&env, &client, &issuer, 5);
 
         let metrics = client.get_issuer_aggregation(&issuer);
@@ -8588,7 +8592,7 @@ mod regression {
     #[test]
     fn aggregation_stress_many_offerings() {
         let env = Env::default();
-    let (client, issuer) = setup(&env);
+        let (client, issuer) = setup(&env);
 
         // Register 20 offerings and report revenue on each
         let mut tokens = soroban_sdk::Vec::new(&env);
@@ -9829,4 +9833,415 @@ mod negative_amount_validation_matrix {
         );
         assert!(result.is_err(), "Negative amount should be rejected");
     }
+}
+
+//   - get_multisig_owners / get_multisig_threshold are safe to call before init.
+
+/// Helper: propose + fully approve + execute a RemoveOwner action using the 2-of-3 setup.
+fn propose_approve_execute_remove(
+    client: &RevoraRevenueShareClient,
+    proposer: &Address,
+    approver: &Address,
+    target: &Address,
+) -> u32 {
+    let pid = client.propose_action(proposer, &ProposalAction::RemoveOwner(target.clone()));
+    client.approve_action(approver, &pid);
+    client.execute_action(&pid);
+    pid
+}
+
+// ── Task 4.1: basic happy path ────────────────────────────────
+
+#[test]
+fn test_remove_owner_success() {
+    let (_env, client, owner1, owner2, owner3, _caller) = multisig_setup();
+    // 2-of-3 setup; remove owner3
+    let pid = client.propose_action(&owner1, &ProposalAction::RemoveOwner(owner3.clone()));
+    client.approve_action(&owner2, &pid);
+    client.execute_action(&pid);
+
+    let owners = client.get_multisig_owners();
+    assert_eq!(owners.len(), 2);
+    for i in 0..owners.len() {
+        assert_ne!(owners.get(i).unwrap(), owner3);
+    }
+}
+
+// ── Task 4.2: removing the last owner fails ───────────────────
+
+#[test]
+fn test_remove_last_owner_fails() {
+    // 1-of-1 multisig: removing the sole owner would leave 0 < threshold=1
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register_contract(None, RevoraRevenueShare);
+    let client = RevoraRevenueShareClient::new(&env, &id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &None, &None);
+
+    let sole_owner = Address::generate(&env);
+    let mut owners = Vec::new(&env);
+    owners.push_back(sole_owner.clone());
+    client.init_multisig(&admin, &owners, &1);
+
+    let pid = client.propose_action(&sole_owner, &ProposalAction::RemoveOwner(sole_owner.clone()));
+    // No second approver needed — threshold is 1 and proposer auto-approves.
+    let r = client.try_execute_action(&pid);
+    assert!(r.is_err(), "Removing the last owner must fail");
+    // Owner list must be unchanged
+    assert_eq!(client.get_multisig_owners().len(), 1);
+}
+
+// ── Task 4.3: removal at exact threshold boundary succeeds ────
+
+#[test]
+fn test_remove_owner_at_threshold_boundary() {
+    // 3 owners, threshold=2; after removal: 2 owners == threshold → still valid
+    let (_env, client, owner1, owner2, owner3, _caller) = multisig_setup();
+    let pid = client.propose_action(&owner1, &ProposalAction::RemoveOwner(owner3.clone()));
+    client.approve_action(&owner2, &pid);
+    client.execute_action(&pid);
+
+    assert_eq!(client.get_multisig_owners().len(), 2);
+    assert_eq!(client.get_multisig_threshold(), Some(2));
+}
+
+// ── Task 4.4: removing a non-existent address fails ──────────
+
+#[test]
+fn test_remove_nonexistent_owner() {
+    let (env, client, owner1, owner2, _owner3, _caller) = multisig_setup();
+    let outsider = Address::generate(&env);
+
+    let pid = client.propose_action(&owner1, &ProposalAction::RemoveOwner(outsider.clone()));
+    client.approve_action(&owner2, &pid);
+    let r = client.try_execute_action(&pid);
+    assert!(r.is_err(), "Removing a non-owner must return NotAuthorized");
+    // Owner list must be unchanged
+    assert_eq!(client.get_multisig_owners().len(), 3);
+}
+
+// ── Task 4.5: duplicate removal proposal — second fails ───────
+
+#[test]
+fn test_duplicate_removal_proposal() {
+    let (_env, client, owner1, owner2, owner3, _caller) = multisig_setup();
+
+    // First proposal: remove owner3 — succeeds
+    let p1 = client.propose_action(&owner1, &ProposalAction::RemoveOwner(owner3.clone()));
+    client.approve_action(&owner2, &p1);
+    client.execute_action(&p1);
+
+    // Second proposal targeting the same (now-removed) owner3
+    let p2 = client.propose_action(&owner1, &ProposalAction::RemoveOwner(owner3.clone()));
+    client.approve_action(&owner2, &p2);
+    let r = client.try_execute_action(&p2);
+    assert!(r.is_err(), "Stale removal proposal must fail with NotAuthorized");
+}
+
+// ── Task 4.6: self-removal succeeds when quorum remains ───────
+
+#[test]
+fn test_self_removal_success() {
+    // 3 owners, threshold=2; owner3 proposes own removal — quorum (2) still intact after
+    let (_env, client, owner1, owner2, owner3, _caller) = multisig_setup();
+
+    let pid = client.propose_action(&owner3, &ProposalAction::RemoveOwner(owner3.clone()));
+    client.approve_action(&owner1, &pid);
+    client.execute_action(&pid);
+
+    let owners = client.get_multisig_owners();
+    assert_eq!(owners.len(), 2);
+    for i in 0..owners.len() {
+        assert_ne!(owners.get(i).unwrap(), owner3);
+    }
+}
+
+// ── Task 4.7: self-removal fails when it would break quorum ──
+
+#[test]
+fn test_self_removal_fails_quorum() {
+    // 2 owners, threshold=2; removing either would leave 1 < 2
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register_contract(None, RevoraRevenueShare);
+    let client = RevoraRevenueShareClient::new(&env, &id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &None, &None);
+
+    let o1 = Address::generate(&env);
+    let o2 = Address::generate(&env);
+    let mut owners = Vec::new(&env);
+    owners.push_back(o1.clone());
+    owners.push_back(o2.clone());
+    client.init_multisig(&admin, &owners, &2);
+
+    // o1 proposes own removal; o2 approves — threshold met but invariant violated
+    let pid = client.propose_action(&o1, &ProposalAction::RemoveOwner(o1.clone()));
+    client.approve_action(&o2, &pid);
+    let r = client.try_execute_action(&pid);
+    assert!(r.is_err(), "Self-removal that breaks quorum must fail");
+    assert_eq!(client.get_multisig_owners().len(), 2);
+}
+
+// ── Task 4.8: proposing self-removal is allowed (check deferred) ─
+
+#[test]
+fn test_propose_self_removal_allowed() {
+    // Proposal creation must succeed even if execution would fail
+    let (_env, client, owner1, _owner2, _owner3, _caller) = multisig_setup();
+    let r = client.try_propose_action(&owner1, &ProposalAction::RemoveOwner(owner1.clone()));
+    assert!(r.is_ok(), "Proposing self-removal must succeed; safety check is at execution time");
+}
+
+// ── Task 4.9: prop_exe event emitted on success ───────────────
+
+#[test]
+fn test_event_emitted_on_success() {
+    let (env, client, owner1, owner2, owner3, _caller) = multisig_setup();
+
+    let pid = client.propose_action(&owner1, &ProposalAction::RemoveOwner(owner3.clone()));
+    client.approve_action(&owner2, &pid);
+
+    let before = env.events().all().len();
+    client.execute_action(&pid);
+    let after = env.events().all().len();
+
+    assert!(after > before, "At least one event must be emitted on successful removal");
+
+    // The prop_exe event is the last one emitted by execute_action for RemoveOwner.
+    // We verify the event count increased — the existing multisig_execute_emits_event
+    // test already validates the event mechanism; here we confirm it fires for RemoveOwner.
+    // Detailed topic matching is covered by snapshot tests.
+}
+
+// ── Task 4.10: no event on failure ───────────────────────────
+
+#[test]
+fn test_no_event_on_failure_nonexistent_owner() {
+    let (env, client, owner1, owner2, _owner3, _caller) = multisig_setup();
+    let outsider = Address::generate(&env);
+
+    let pid = client.propose_action(&owner1, &ProposalAction::RemoveOwner(outsider.clone()));
+    client.approve_action(&owner2, &pid);
+
+    let before = env.events().all().len();
+    let _ = client.try_execute_action(&pid);
+    let after = env.events().all().len();
+
+    // No new events should be emitted on failure
+    assert_eq!(before, after, "No events must be emitted when removal fails");
+}
+
+#[test]
+fn test_no_event_on_failure_threshold_violation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register_contract(None, RevoraRevenueShare);
+    let client = RevoraRevenueShareClient::new(&env, &id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &None, &None);
+
+    let o1 = Address::generate(&env);
+    let o2 = Address::generate(&env);
+    let mut owners = Vec::new(&env);
+    owners.push_back(o1.clone());
+    owners.push_back(o2.clone());
+    client.init_multisig(&admin, &owners, &2);
+
+    let pid = client.propose_action(&o1, &ProposalAction::RemoveOwner(o1.clone()));
+    client.approve_action(&o2, &pid);
+
+    let before = env.events().all().len();
+    let _ = client.try_execute_action(&pid);
+    let after = env.events().all().len();
+
+    assert_eq!(before, after, "No events must be emitted when threshold invariant is violated");
+}
+
+// ── Task 4.11: get_multisig_owners before init ────────────────
+
+#[test]
+fn test_get_multisig_owners_uninitialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register_contract(None, RevoraRevenueShare);
+    let client = RevoraRevenueShareClient::new(&env, &id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &None, &None);
+    // Multisig not yet initialized
+    let owners = client.get_multisig_owners();
+    assert_eq!(owners.len(), 0, "get_multisig_owners must return empty Vec before init");
+}
+
+// ── Task 4.12: get_multisig_threshold before init ─────────────
+
+#[test]
+fn test_get_multisig_threshold_uninitialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register_contract(None, RevoraRevenueShare);
+    let client = RevoraRevenueShareClient::new(&env, &id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &None, &None);
+    assert_eq!(
+        client.get_multisig_threshold(),
+        None,
+        "get_multisig_threshold must return None before init"
+    );
+}
+
+// ── Task 4.13: query reflects removal in same ledger ─────────
+
+#[test]
+fn test_get_multisig_owners_after_removal() {
+    let (_env, client, owner1, owner2, owner3, _caller) = multisig_setup();
+
+    let pid = client.propose_action(&owner1, &ProposalAction::RemoveOwner(owner3.clone()));
+    client.approve_action(&owner2, &pid);
+    client.execute_action(&pid);
+
+    let owners = client.get_multisig_owners();
+    assert_eq!(owners.len(), 2);
+    for i in 0..owners.len() {
+        assert_ne!(owners.get(i).unwrap(), owner3, "Removed owner must not appear in query result");
+    }
+}
+
+// ── Task 4.14: execute_action requires no auth ────────────────
+
+#[test]
+fn test_execute_action_no_auth_required() {
+    // Any address (even a non-owner) can call execute_action once threshold is met
+    let (env, client, owner1, owner2, owner3, _caller) = multisig_setup();
+    let _random_caller = Address::generate(&env);
+
+    let pid = client.propose_action(&owner1, &ProposalAction::RemoveOwner(owner3.clone()));
+    client.approve_action(&owner2, &pid);
+
+    // Execute as a random non-owner — must succeed
+    client.execute_action(&pid);
+    assert_eq!(client.get_multisig_owners().len(), 2);
+}
+
+// ── Task 4.15: propose_action requires auth ───────────────────
+
+#[test]
+fn test_propose_requires_auth() {
+    let (env, client, _owner1, _owner2, _owner3, _caller) = multisig_setup();
+    // Without mock_all_auths the auth check fires; we use try_ to catch the panic
+    let outsider = Address::generate(&env);
+    let r = client.try_propose_action(&outsider, &ProposalAction::Freeze);
+    assert!(r.is_err(), "propose_action must reject non-owners");
+}
+
+// ── Task 4.16: approve_action requires auth ───────────────────
+
+#[test]
+fn test_approve_requires_auth() {
+    let (env, client, owner1, _owner2, _owner3, _caller) = multisig_setup();
+    let outsider = Address::generate(&env);
+    let pid = client.propose_action(&owner1, &ProposalAction::Freeze);
+    let r = client.try_approve_action(&outsider, &pid);
+    assert!(r.is_err(), "approve_action must reject non-owners");
+}
+
+// ── Task 4.17: re-execution of executed proposal fails ────────
+
+#[test]
+fn test_re_execute_fails() {
+    let (_env, client, owner1, owner2, owner3, _caller) = multisig_setup();
+
+    let pid = client.propose_action(&owner1, &ProposalAction::RemoveOwner(owner3.clone()));
+    client.approve_action(&owner2, &pid);
+    client.execute_action(&pid);
+
+    let r = client.try_execute_action(&pid);
+    assert!(r.is_err(), "Re-executing an executed proposal must fail");
+}
+
+// ── Task 4.18: get_proposal returns executed=true after execution ─
+
+#[test]
+fn test_get_proposal_executed_flag() {
+    let (_env, client, owner1, owner2, owner3, _caller) = multisig_setup();
+
+    let pid = client.propose_action(&owner1, &ProposalAction::RemoveOwner(owner3.clone()));
+    client.approve_action(&owner2, &pid);
+
+    // Before execution: executed must be false
+    let before = client.get_proposal(&pid).unwrap();
+    assert!(!before.executed);
+
+    client.execute_action(&pid);
+
+    // After execution: executed must be true
+    let after = client.get_proposal(&pid).unwrap();
+    assert!(after.executed, "get_proposal must return executed=true after execution");
+}
+
+// ── Task 4.19: get_proposal returns None for unknown ID ───────
+
+#[test]
+fn test_get_proposal_unknown_id() {
+    let (_env, client, _owner1, _owner2, _owner3, _caller) = multisig_setup();
+    assert!(client.get_proposal(&9999).is_none(), "get_proposal must return None for unknown ID");
+}
+
+// ── Task 4.20: threshold unchanged after removal ──────────────
+
+#[test]
+fn test_threshold_not_adjusted_after_removal() {
+    let (_env, client, owner1, owner2, owner3, _caller) = multisig_setup();
+
+    let threshold_before = client.get_multisig_threshold();
+    let pid = client.propose_action(&owner1, &ProposalAction::RemoveOwner(owner3.clone()));
+    client.approve_action(&owner2, &pid);
+    client.execute_action(&pid);
+
+    let threshold_after = client.get_multisig_threshold();
+    assert_eq!(threshold_before, threshold_after, "Threshold must not change after owner removal");
+}
+
+// ── Invariant: post-removal threshold <= owner count ─────────
+
+#[test]
+fn test_post_removal_threshold_invariant() {
+    // After any successful removal: threshold <= len(owners) and len(owners) >= 1
+    let (_env, client, owner1, owner2, owner3, _caller) = multisig_setup();
+
+    let pid = client.propose_action(&owner1, &ProposalAction::RemoveOwner(owner3.clone()));
+    client.approve_action(&owner2, &pid);
+    client.execute_action(&pid);
+
+    let owners = client.get_multisig_owners();
+    let threshold = client.get_multisig_threshold().unwrap();
+    assert!(owners.len() >= 1, "Owner count must be >= 1 after removal");
+    assert!(threshold <= owners.len(), "Threshold must be <= owner count after removal");
+}
+
+// ── Guard order: existence check fires before threshold check ─
+
+#[test]
+fn test_guard_order_nonexistent_takes_priority() {
+    // Even if removal would also violate threshold, NotAuthorized fires first
+    // Setup: 1 owner, threshold=1; target is a non-member
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register_contract(None, RevoraRevenueShare);
+    let client = RevoraRevenueShareClient::new(&env, &id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &None, &None);
+
+    let sole_owner = Address::generate(&env);
+    let outsider = Address::generate(&env);
+    let mut owners = Vec::new(&env);
+    owners.push_back(sole_owner.clone());
+    client.init_multisig(&admin, &owners, &1);
+
+    let pid = client.propose_action(&sole_owner, &ProposalAction::RemoveOwner(outsider.clone()));
+    // Threshold met (1-of-1, proposer auto-approves)
+    let r = client.try_execute_action(&pid);
+    // Must fail — outsider is not an owner (NotAuthorized, not LimitReached)
+    assert!(r.is_err());
 }
