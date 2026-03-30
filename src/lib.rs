@@ -73,6 +73,8 @@ pub enum RevoraError {
     SignatureReplay = 28,
     /// Off-chain signer key has not been registered.
     SignerKeyNotRegistered = 29,
+    /// Multisig proposal has expired.
+    ProposalExpired = 30,
 }
 
 // ── Event symbols ────────────────────────────────────────────
@@ -120,6 +122,7 @@ const EVENT_CLAIM_DELAY_SET: Symbol = symbol_short!("delay_set");
 const EVENT_PROPOSAL_CREATED: Symbol = symbol_short!("prop_new");
 const EVENT_PROPOSAL_APPROVED: Symbol = symbol_short!("prop_app");
 const EVENT_PROPOSAL_EXECUTED: Symbol = symbol_short!("prop_exe");
+const EVENT_DURATION_SET: Symbol = symbol_short!("dur_set");
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -129,6 +132,7 @@ pub enum ProposalAction {
     SetThreshold(u32),
     AddOwner(Address),
     RemoveOwner(Address),
+    SetProposalDuration(u64),
 }
 
 #[contracttype]
@@ -139,6 +143,7 @@ pub struct Proposal {
     pub proposer: Address,
     pub approvals: Vec<Address>,
     pub executed: bool,
+    pub expiry: u64,
 }
 
 const EVENT_SNAP_CONFIG: Symbol = symbol_short!("snap_cfg");
@@ -416,6 +421,8 @@ pub enum DataKey {
     MultisigProposal(u32),
     /// Multisig proposal count.
     MultisigProposalCount,
+    /// Multisig proposal duration in seconds.
+    MultisigProposalDuration,
 
     /// Whether snapshot distribution is enabled for an offering.
     SnapshotConfig(OfferingId),
@@ -3067,6 +3074,7 @@ impl RevoraRevenueShare {
         caller: Address,
         owners: Vec<Address>,
         threshold: u32,
+        proposal_duration: u64,
     ) -> Result<(), RevoraError> {
         caller.require_auth();
         if env.storage().persistent().has(&DataKey::MultisigThreshold) {
@@ -3081,6 +3089,7 @@ impl RevoraRevenueShare {
         env.storage().persistent().set(&DataKey::MultisigThreshold, &threshold);
         env.storage().persistent().set(&DataKey::MultisigOwners, &owners);
         env.storage().persistent().set(&DataKey::MultisigProposalCount, &0_u32);
+        env.storage().persistent().set(&DataKey::MultisigProposalDuration, &proposal_duration);
         Ok(())
     }
 
@@ -3097,6 +3106,14 @@ impl RevoraRevenueShare {
         let count_key = DataKey::MultisigProposalCount;
         let id: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
 
+        let duration: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MultisigProposalDuration)
+            .ok_or(RevoraError::NotInitialized)?;
+        let now = env.ledger().timestamp();
+        let expiry = now.checked_add(duration).ok_or(RevoraError::InvalidAmount)?;
+
         // Proposer's vote counts as the first approval automatically
         let mut initial_approvals = Vec::new(&env);
         initial_approvals.push_back(proposer.clone());
@@ -3107,12 +3124,13 @@ impl RevoraRevenueShare {
             proposer: proposer.clone(),
             approvals: initial_approvals,
             executed: false,
+            expiry,
         };
 
         env.storage().persistent().set(&DataKey::MultisigProposal(id), &proposal);
         env.storage().persistent().set(&count_key, &(id + 1));
 
-        env.events().publish((EVENT_PROPOSAL_CREATED, proposer.clone()), id);
+        env.events().publish((EVENT_PROPOSAL_CREATED, proposer.clone()), (id, expiry));
         env.events().publish((EVENT_PROPOSAL_APPROVED, proposer), id);
         Ok(id)
     }
@@ -3132,6 +3150,10 @@ impl RevoraRevenueShare {
 
         if proposal.executed {
             return Err(RevoraError::LimitReached);
+        }
+
+        if env.ledger().timestamp() >= proposal.expiry {
+            return Err(RevoraError::ProposalExpired);
         }
 
         // Check for duplicate approvals
@@ -3156,6 +3178,10 @@ impl RevoraRevenueShare {
 
         if proposal.executed {
             return Err(RevoraError::LimitReached);
+        }
+
+        if env.ledger().timestamp() >= proposal.expiry {
+            return Err(RevoraError::ProposalExpired);
         }
 
         let threshold: u32 = env
@@ -3207,6 +3233,18 @@ impl RevoraRevenueShare {
                     return Err(RevoraError::LimitReached); // Would break threshold
                 }
                 env.storage().persistent().set(&DataKey::MultisigOwners, &new_owners);
+            }
+            ProposalAction::SetProposalDuration(new_duration) => {
+                if new_duration == 0 {
+                    return Err(RevoraError::InvalidAmount);
+                }
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::MultisigProposalDuration, &new_duration);
+                env.events().publish(
+                    (EVENT_DURATION_SET, proposal.proposer.clone()),
+                    new_duration,
+                );
             }
         }
 
@@ -3993,8 +4031,13 @@ mod vesting_test;
 #[cfg(test)]
 mod test_utils;
 
+#[cfg(test)]
 mod chunking_tests;
+#[cfg(test)]
 mod test;
+#[cfg(test)]
 mod test_auth;
+#[cfg(test)]
 mod test_cross_contract;
+#[cfg(test)]
 mod test_namespaces;
