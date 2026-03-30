@@ -809,8 +809,6 @@ dependencies = [
 name = "revora-contracts"
 version = "0.1.0"
 dependencies = [
- "arbitrary",
- "ed25519-dalek",
  "soroban-sdk",
 ]
 
