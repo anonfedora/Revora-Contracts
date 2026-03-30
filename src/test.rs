@@ -746,8 +746,6 @@ fn zero_amount_revenue_report_rejected() {
     assert_eq!(result.unwrap_err(), RevoraError::InvalidAmount);
 }
 
-}
-
 #[test]
 fn negative_amount_revenue_report_rejected() {
     let env = Env::default();
@@ -2755,6 +2753,63 @@ fn compute_share_no_overflow_bounds() {
     assert_eq!(share, amount);
     let share2 = client.compute_share(&amount, &10_000, &RoundingMode::RoundHalfUp);
     assert_eq!(share2, amount);
+}
+
+#[test]
+fn compute_share_max_amount_full_bps_is_exact() {
+    let env = Env::default();
+    let client = make_client(&env);
+    let amount = i128::MAX;
+
+    let trunc = client.compute_share(&amount, &10_000, &RoundingMode::Truncation);
+    let half_up = client.compute_share(&amount, &10_000, &RoundingMode::RoundHalfUp);
+
+    assert_eq!(trunc, amount);
+    assert_eq!(half_up, amount);
+}
+
+#[test]
+fn compute_share_max_amount_half_bps_rounding_is_deterministic() {
+    let env = Env::default();
+    let client = make_client(&env);
+    let amount = i128::MAX;
+
+    // For 50%, truncation and half-up differ by exactly 1 for odd amounts.
+    let trunc = client.compute_share(&amount, &5_000, &RoundingMode::Truncation);
+    let half_up = client.compute_share(&amount, &5_000, &RoundingMode::RoundHalfUp);
+
+    assert_eq!(trunc, amount / 2);
+    assert_eq!(half_up, (amount / 2) + 1);
+}
+
+#[test]
+fn compute_share_min_amount_full_bps_is_exact() {
+    let env = Env::default();
+    let client = make_client(&env);
+    let amount = i128::MIN;
+
+    let trunc = client.compute_share(&amount, &10_000, &RoundingMode::Truncation);
+    let half_up = client.compute_share(&amount, &10_000, &RoundingMode::RoundHalfUp);
+
+    assert_eq!(trunc, amount);
+    assert_eq!(half_up, amount);
+}
+
+#[test]
+fn compute_share_extreme_inputs_remain_bounded() {
+    let env = Env::default();
+    let client = make_client(&env);
+
+    let amount = i128::MAX;
+    let share = client.compute_share(&amount, &9_999, &RoundingMode::RoundHalfUp);
+    assert!(share >= 0);
+    assert!(share <= amount);
+
+    let negative_amount = i128::MIN;
+    let negative_share =
+        client.compute_share(&negative_amount, &9_999, &RoundingMode::RoundHalfUp);
+    assert!(negative_share <= 0);
+    assert!(negative_share >= negative_amount);
 }
 
 // ===========================================================================
