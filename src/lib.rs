@@ -800,6 +800,14 @@ impl RevoraRevenueShare {
         Ok(())
     }
 
+    /// Returns the admin address or `Err(NotInitialized)` when `DataKey::Admin` is absent.
+    fn require_admin(env: &Env) -> Result<Address, RevoraError> {
+        env.storage()
+            .persistent()
+            .get::<DataKey, Address>(&DataKey::Admin)
+            .ok_or(RevoraError::NotInitialized)
+    }
+
     /// Helper to emit deterministic v2 versioned events for core event versioning.
     /// Emits: topic -> (EVENT_SCHEMA_VERSION_V2, data...)
     /// All core events MUST use this for schema compliance and indexer compatibility.
@@ -1719,40 +1727,9 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
                 (EVENT_REV_INIT_V1, issuer.clone(), namespace.clone(), token.clone()),
                 (EVENT_SCHEMA_VERSION, amount, period_id, blacklist.clone()),
             );
-
-        /// Versioned event v2: [version: u32, payout_asset: Address, amount: i128, period_id: u64, blacklist: Vec<Address>]
-        Self::emit_v2_event(
-            &env,
-            (EVENT_REV_INIA_V2, issuer.clone(), namespace.clone(), token.clone()),
-            (payout_asset.clone(), amount, period_id, blacklist.clone())
-        );
-
-        /// Versioned event v2: [version: u32, amount: i128, period_id: u64, blacklist: Vec<Address>]
-        Self::emit_v2_event(
-            &env,
-            (EVENT_REV_REP_V2, issuer.clone(), namespace.clone(), token.clone()),
-            (amount, period_id, blacklist.clone())
-        );
-
-        /// Versioned event v2: [version: u32, payout_asset: Address, amount: i128, period_id: u64]
-        Self::emit_v2_event(
-            &env,
-            (EVENT_REV_REPA_V2, issuer.clone(), namespace.clone(), token.clone()),
-            (payout_asset.clone(), amount, period_id)
-        );
-
-        let is_consistent = !saturated
-            && stored.total_revenue == computed_total
-            && stored.report_count == computed_report_count;
-
-        AuditReconciliationResult {
-            stored_total_revenue: stored.total_revenue,
-            stored_report_count: stored.report_count,
-            computed_total_revenue: computed_total,
-            computed_report_count,
-            is_consistent,
-            is_saturated: saturated,
         }
+
+        Ok(())
     }
 
     /// Repair the `AuditSummary` for an offering by recomputing it from the
@@ -4474,6 +4451,7 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
     /// Accept a pending issuer transfer. Only the proposed new issuer may call this.
     pub fn accept_issuer_transfer(
         env: Env,
+        caller: Address,
         issuer: Address,
         namespace: Symbol,
         token: Address,
@@ -4498,6 +4476,11 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
         }
 
         let new_issuer = pending.new_issuer;
+
+        // Typed check: caller must be the nominated new issuer.
+        if caller != new_issuer {
+            return Err(RevoraError::UnauthorizedTransferAccept);
+        }
 
         // Only the proposed new issuer can accept
         new_issuer.require_auth();
@@ -4984,9 +4967,7 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
     /// When enabled, certain validations are relaxed for testnet deployments.
     /// Emits event with new mode state.
     pub fn set_testnet_mode(env: Env, enabled: bool) -> Result<(), RevoraError> {
-        let key = DataKey::Admin;
-        let admin: Address =
-            env.storage().persistent().get(&key).ok_or(RevoraError::LimitReached)?;
+        let admin = Self::require_admin(&env)?;
         admin.require_auth();
         if !Self::is_event_only(&env) {
             let mode_key = DataKey::TestnetMode;
@@ -5328,3 +5309,5 @@ mod test_cross_contract;
 #[cfg(test)]
 mod test_namespaces;
 mod test_period_id_boundary;
+#[cfg(test)]
+mod structured_error_tests;
