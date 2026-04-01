@@ -453,6 +453,9 @@ pub enum DataKey {
     PeriodCount(OfferingId),
     /// Holder's share in basis points for (offering_id, holder).
     HolderShare(OfferingId, Address),
+    /// Running sum of all holder share_bps for an offering.
+    /// Invariant: value ≤ 10 000 at all times.
+    TotalShareBps(OfferingId),
     /// Next period index to claim for (offering_id, holder).
     LastClaimedIdx(OfferingId, Address),
     /// Payment token address for an offering.
@@ -1427,6 +1430,7 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
         Self::require_not_frozen(&env)?;
         Self::require_not_paused(&env)?;
         issuer.require_auth();
+        Self::require_non_negative_amount(amount)?;
 
         // Negative Amount Validation Matrix: RevenueReport requires amount >= 0 (#163)
         if let Err((err, reason)) =
@@ -2166,10 +2170,6 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
         Ok(())
     }
 
-    /// Remove `investor` from the per-offering whitelist for `token`.
-    ///
-    /// Idempotent — calling when the address is not listed is safe.
-    /// Remove `investor` from the per-offering whitelist.
     pub fn whitelist_remove(
         env: Env,
         caller: Address,
@@ -2668,6 +2668,7 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
         period_id: u64,
     ) -> Result<(), RevoraError> {
         Self::require_not_frozen(&env)?;
+        issuer.require_auth();
 
         // Input validation (#35): reject zero/invalid period_id and non-positive amounts.
         Self::require_valid_period_id(period_id)?;
@@ -3303,6 +3304,26 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
     ) -> u32 {
         let offering_id = OfferingId { issuer, namespace, token };
         let key = DataKey::HolderShare(offering_id, holder);
+        env.storage().persistent().get(&key).unwrap_or(0)
+    }
+
+    /// Return the aggregate sum of all holder share_bps for an offering.
+    ///
+    /// The value is maintained by `set_holder_share` and is guaranteed to be
+    /// ≤ 10 000 (100 %) at all times.  Returns 0 if no shares have been set.
+    ///
+    /// ### Security note
+    /// This is a read-only view; it cannot be manipulated directly.  The only
+    /// write path is through `set_holder_share` / `meta_set_holder_share`, both
+    /// of which enforce the invariant before persisting.
+    pub fn get_total_share_bps(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+    ) -> u32 {
+        let offering_id = OfferingId { issuer, namespace, token };
+        let key = DataKey::TotalShareBps(offering_id);
         env.storage().persistent().get(&key).unwrap_or(0)
     }
 
@@ -4560,6 +4581,14 @@ fn require_next_period_id(env: &Env, offering_id: &OfferingId, period_id: u64) -
         // So OfferingId MUST include issuer.
 
         // Okay, I'll stick with OfferingId including issuer. Issuer transfer will be a "new" offering from the storage perspective.
+
+        let old_offering_id = OfferingId {
+            issuer: old_issuer.clone(),
+            namespace: namespace.clone(),
+            token: token.clone(),
+        };
+        // Remove old issuer lookup so old issuer can no longer manage this offering
+        env.storage().persistent().remove(&DataKey::OfferingIssuer(old_offering_id));
 
         let new_offering_id = OfferingId {
             issuer: new_issuer.clone(),
