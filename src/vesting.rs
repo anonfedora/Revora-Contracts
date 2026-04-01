@@ -19,6 +19,7 @@ pub enum VestingError {
     InvalidAmount = 6,
     InvalidDuration = 7,
     InvalidCliff = 8,
+    AmendmentNotAllowed = 9,
 }
 
 #[contracttype]
@@ -48,12 +49,7 @@ pub enum VestingDataKey {
 const EVENT_VESTING_CREATED: Symbol = symbol_short!("vest_crt");
 const EVENT_VESTING_CLAIMED: Symbol = symbol_short!("vest_clm");
 const EVENT_VESTING_CANCELLED: Symbol = symbol_short!("vest_can");
-const EVENT_VESTING_CREATED_V1: Symbol = symbol_short!("vst_crt1");
-const EVENT_VESTING_CLAIMED_V1: Symbol = symbol_short!("vst_clm1");
-const EVENT_VESTING_CANCELLED_V1: Symbol = symbol_short!("vst_can1");
-
-/// Version tag for versioned vesting event payloads.
-pub const VESTING_EVENT_SCHEMA_VERSION: u32 = 1;
+const EVENT_VESTING_AMENDED: Symbol = symbol_short!("vest_amd");
 
 #[contract]
 pub struct RevoraVesting;
@@ -177,6 +173,85 @@ impl RevoraVesting {
             (EVENT_VESTING_CANCELLED_V1, admin, beneficiary),
             (VESTING_EVENT_SCHEMA_VERSION, schedule_index, schedule.token.clone()),
         );
+        Ok(())
+    }
+
+    /// Amend an existing vesting schedule. Admin only.
+    /// Allows updating the total amount, start time, cliff, and duration.
+    ///
+    /// ### Parameters
+    /// - `admin`: The authorized admin address.
+    /// - `beneficiary`: The beneficiary of the schedule.
+    /// - `schedule_index`: The index of the schedule to amend.
+    /// - `new_total_amount`: The new total amount (cannot be less than `claimed_amount`).
+    /// - `new_start_time`: The new start timestamp.
+    /// - `new_cliff_duration_secs`: The new cliff duration in seconds.
+    /// - `new_duration_secs`: The new total duration in seconds.
+    ///
+    /// ### Security Assumptions
+    /// - Caller must be the authorized admin.
+    /// - Schedule must exist and not be cancelled.
+    /// - New total amount cannot be less than already claimed tokens to maintain accounting integrity.
+    /// - Duration and cliff bounds are strictly enforced (duration > 0, cliff <= duration).
+    #[allow(clippy::too_many_arguments)]
+    pub fn amend_schedule(
+        env: Env,
+        admin: Address,
+        beneficiary: Address,
+        schedule_index: u32,
+        new_total_amount: i128,
+        new_start_time: u64,
+        new_cliff_duration_secs: u64,
+        new_duration_secs: u64,
+    ) -> Result<(), VestingError> {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&VestingDataKey::Admin)
+            .ok_or(VestingError::Unauthorized)?;
+        if admin != stored_admin {
+            return Err(VestingError::Unauthorized);
+        }
+
+        let key = VestingDataKey::Schedule(admin.clone(), schedule_index);
+        let mut schedule: VestingSchedule =
+            env.storage().persistent().get(&key).ok_or(VestingError::ScheduleNotFound)?;
+
+        if schedule.beneficiary != beneficiary {
+            return Err(VestingError::ScheduleNotFound);
+        }
+        if schedule.cancelled {
+            return Err(VestingError::AmendmentNotAllowed);
+        }
+
+        // Validity checks
+        if new_total_amount < schedule.claimed_amount {
+            return Err(VestingError::InvalidAmount);
+        }
+        if new_duration_secs == 0 {
+            return Err(VestingError::InvalidDuration);
+        }
+        if new_cliff_duration_secs > new_duration_secs {
+            return Err(VestingError::InvalidCliff);
+        }
+
+        let new_end_time = new_start_time.saturating_add(new_duration_secs);
+        let new_cliff_time = new_start_time.saturating_add(new_cliff_duration_secs);
+
+        // Update schedule parameters
+        schedule.total_amount = new_total_amount;
+        schedule.start_time = new_start_time;
+        schedule.cliff_time = new_cliff_time;
+        schedule.end_time = new_end_time;
+
+        env.storage().persistent().set(&key, &schedule);
+
+        env.events().publish(
+            (EVENT_VESTING_AMENDED, admin, beneficiary),
+            (schedule_index, new_total_amount, new_start_time, new_cliff_time, new_end_time),
+        );
+
         Ok(())
     }
 
