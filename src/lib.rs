@@ -1705,9 +1705,11 @@ impl RevoraRevenueShare {
         }
         // Optionally emit versioned v1 events for forward-compatible consumers
         if Self::is_event_versioning_enabled(env.clone()) {
-            env.events().publish(
-                (EVENT_REV_INIT_V1, issuer.clone(), namespace.clone(), token.clone()),
-                (EVENT_SCHEMA_VERSION, amount, period_id, blacklist.clone()),
+            // Versioned event v2: [version: u32, payout_asset: Address, amount: i128, period_id: u64, blacklist: Vec<Address>]
+            Self::emit_v2_event(
+                &env,
+                (EVENT_REV_INIA_V2, issuer.clone(), namespace.clone(), token.clone()),
+                (payout_asset.clone(), amount, period_id, blacklist.clone()),
             );
         }
 
@@ -2594,7 +2596,13 @@ impl RevoraRevenueShare {
     }
 
     /// Compute share of `amount` at `revenue_share_bps` using the given rounding mode.
-    /// Guarantees: result between 0 and amount (inclusive); no loss of funds when summing shares if caller uses same mode.
+    /// Security assumptions:
+    /// - Callers should pass `revenue_share_bps` in [0, 10_000]. Values above 10_000 are rejected by returning 0.
+    /// - Revenue flows in this contract are non-negative, but this helper is total over signed `amount` for testability.
+    ///
+    /// Guarantees:
+    /// - Overflow-resistant arithmetic without panic.
+    /// - Result is clamped to [min(0, amount), max(0, amount)] to avoid over-distribution.
     pub fn compute_share(
         _env: Env,
         amount: i128,
@@ -2604,17 +2612,45 @@ impl RevoraRevenueShare {
         if revenue_share_bps > 10_000 {
             return 0;
         }
+        if amount == 0 || revenue_share_bps == 0 {
+            return 0;
+        }
+
+        // Decompose `amount` to avoid `amount * bps` overflow:
+        // amount = q * 10_000 + r, so (amount * bps) / 10_000 = q * bps + (r * bps) / 10_000.
+        // `r` is bounded to (-10_000, 10_000), so `r * bps` is always safe in i128.
+        let q = amount / 10_000;
+        let r = amount % 10_000;
         let bps = revenue_share_bps as i128;
-        let raw = amount.checked_mul(bps).unwrap_or(0);
-        let share = match mode {
-            RoundingMode::Truncation => raw.checked_div(10_000).unwrap_or(0),
+        let base = q.checked_mul(bps).unwrap_or_else(|| {
+            if (q >= 0 && bps >= 0) || (q < 0 && bps < 0) {
+                i128::MAX
+            } else {
+                i128::MIN
+            }
+        });
+
+        let remainder_product = r * bps;
+        let remainder_share = match mode {
+            RoundingMode::Truncation => remainder_product / 10_000,
             RoundingMode::RoundHalfUp => {
                 let half = 5_000_i128;
-                let adjusted =
-                    if raw >= 0 { raw.saturating_add(half) } else { raw.saturating_sub(half) };
-                adjusted.checked_div(10_000).unwrap_or(0)
+                if remainder_product >= 0 {
+                    remainder_product.saturating_add(half) / 10_000
+                } else {
+                    remainder_product.saturating_sub(half) / 10_000
+                }
             }
         };
+
+        let share = base.checked_add(remainder_share).unwrap_or_else(|| {
+            if (base >= 0 && remainder_share >= 0) || (base < 0 && remainder_share < 0) {
+                if base >= 0 { i128::MAX } else { i128::MIN }
+            } else {
+                0
+            }
+        });
+
         // Clamp to [min(0, amount), max(0, amount)] to avoid overflow semantics affecting bounds
         let lo = core::cmp::min(0, amount);
         let hi = core::cmp::max(0, amount);
