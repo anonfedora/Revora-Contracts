@@ -19,6 +19,7 @@ fn setup_offering(env: &Env, client: &RevoraRevenueShareClient) -> (Address, Add
     env.mock_all_auths();
     let issuer = Address::generate(env);
     let token = Address::generate(env);
+    client.set_admin(&issuer);
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &token, &0);
     (issuer, token)
 }
@@ -312,6 +313,7 @@ fn blacklist_remove_wrong_caller_no_mutation() {
     let issuer = Address::generate(&env);
     let token = Address::generate(&env);
     let investor = Address::generate(&env);
+    client.set_admin(&issuer);
     client.register_offering(&issuer, &symbol_short!("def"), &token, &1_000, &token, &0);
     client.blacklist_add(&issuer, &issuer, &symbol_short!("def"), &token, &investor);
     let attacker = Address::generate(&env);
