@@ -2026,30 +2026,6 @@
                 "symbol": "blacklist_add"
               }
             ],
-            "data": "void"
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": null,
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "fn_call"
-              },
-              {
-                "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
-              },
-              {
-                "symbol": "is_blacklisted"
-              }
-            ],
             "data": {
               "vec": [
                 {
@@ -2069,7 +2045,7 @@
           }
         }
       },
-      "failed_call": false
+      "failed_call": true
     },
     {
       "event": {
@@ -2080,19 +2056,21 @@
           "v0": {
             "topics": [
               {
-                "symbol": "fn_return"
+                "symbol": "error"
               },
               {
-                "symbol": "is_blacklisted"
+                "error": {
+                  "contract": 4
+                }
               }
             ],
             "data": {
-              "bool": true
+              "string": "escalating Ok(ScErrorType::Contract) frame-exit to Err"
             }
           }
         }
       },
-      "failed_call": false
+      "failed_call": true
     },
     {
       "event": {
@@ -2103,13 +2081,12 @@
           "v0": {
             "topics": [
               {
-                "symbol": "fn_call"
+                "symbol": "error"
               },
               {
-                "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
-              },
-              {
-                "symbol": "is_blacklisted"
+                "error": {
+                  "contract": 4
+                }
               }
             ],
             "data": {
@@ -2139,20 +2116,22 @@
     {
       "event": {
         "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
+        "contract_id": null,
         "type_": "diagnostic",
         "body": {
           "v0": {
             "topics": [
               {
-                "symbol": "fn_return"
+                "symbol": "error"
               },
               {
-                "symbol": "is_blacklisted"
+                "error": {
+                  "contract": 4
+                }
               }
             ],
             "data": {
-              "bool": false
+              "string": "escalating error to panic"
             }
           }
         }

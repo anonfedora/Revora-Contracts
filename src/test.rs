@@ -5157,8 +5157,10 @@ fn issuer_transfer_propose_requires_auth() {
     let token = Address::generate(&env);
     let new_issuer = Address::generate(&env);
 
-    // No mock_all_auths - should panic
-    client.propose_issuer_transfer(&_issuer, &symbol_short!("def"), &token, &new_issuer);
+    // No mock_all_auths - should return error
+    let r =
+        client.try_propose_issuer_transfer(&_issuer, &symbol_short!("def"), &token, &new_issuer);
+    assert!(r.is_err());
 }
 
 #[test]
@@ -5188,9 +5190,10 @@ fn issuer_transfer_cancel_requires_auth() {
     let client = RevoraRevenueShareClient::new(&env, &contract_id);
     let token = Address::generate(&env);
 
-    // No mock_all_auths - should panic
+    // No mock_all_auths - should return error
     let issuer = Address::generate(&env);
-    client.cancel_issuer_transfer(&issuer, &symbol_short!("def"), &token);
+    let r = client.try_cancel_issuer_transfer(&issuer, &symbol_short!("def"), &token);
+    assert!(r.is_err());
 }
 
 #[test]
@@ -6124,7 +6127,7 @@ fn testnet_mode_requires_auth_to_set() {
     // No mock_all_auths - should error
     let client = make_client(&env);
     let admin = Address::generate(&env);
-    let issuer = admin.clone();
+    let _issuer = admin.clone();
 
     let r = client.try_set_admin(&admin);
     // setting admin without auth should fail
@@ -6694,6 +6697,7 @@ fn calculate_distribution_zero_supply_panics() {
         &100,
         &holder,
     );
+    assert!(r.is_err());
 }
 
 #[test]
@@ -6741,6 +6745,7 @@ fn calculate_distribution_blacklisted_holder_panics() {
         &100,
         &holder,
     );
+    assert!(r.is_err());
 }
 
 #[test]
@@ -6918,6 +6923,7 @@ fn calculate_distribution_requires_auth() {
         &100,
         &holder,
     );
+    assert!(r.is_err());
 }
 
 #[test]
@@ -6996,7 +7002,9 @@ fn calculate_total_distributable_nonexistent_offering_panics() {
     let issuer = Address::generate(&env);
     let token = Address::generate(&env);
 
-    client.calculate_total_distributable(&issuer, &symbol_short!("def"), &token, &100_000);
+    let r =
+        client.try_calculate_total_distributable(&issuer, &symbol_short!("def"), &token, &100_000);
+    assert!(r.is_err());
 }
 
 #[test]
@@ -7314,10 +7322,14 @@ fn test_set_metadata_requires_auth() {
     let issuer = Address::generate(&env);
     let token = Address::generate(&env);
 
-    client.register_offering(&issuer, &symbol_short!("def"), &token, &1000, &token, &0);
-
-    let metadata = SdkString::from_str(&env, "ipfs://QmTest");
-    client.set_offering_metadata(&issuer, &symbol_short!("def"), &token, &metadata);
+    // No mock_all_auths - should return error
+    let r = client.try_set_offering_metadata(
+        &issuer,
+        &symbol_short!("def"),
+        &token,
+        &SdkString::from_str(&env, "ipfs://QmTest"),
+    );
+    assert!(r.is_err());
 }
 
 #[test]
@@ -7893,10 +7905,11 @@ mod regression {
         let contract_id = env.register_contract(None, RevoraRevenueShare);
         let client = RevoraRevenueShareClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
-        let issuer = admin.clone();
+        let _issuer = admin.clone();
 
-        client.initialize(&admin, &None::<Address>, &None::<bool>);
-        client.set_platform_fee(&100);
+        // No mock_all_auths - should return error
+        let r = client.try_set_platform_fee(&100);
+        assert!(r.is_err());
     }
 
     #[test]
@@ -7981,10 +7994,11 @@ mod regression {
         let contract_id = env.register_contract(None, RevoraRevenueShare);
         let client = RevoraRevenueShareClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
-        let issuer = admin.clone();
+        let _issuer = admin.clone();
 
-        client.initialize(&admin, &None::<Address>, &None::<bool>);
-        client.set_platform_fee(&100);
+        // No mock_all_auths - should return error
+        let r = client.try_set_platform_fee(&100);
+        assert!(r.is_err());
     }
 
     #[test]
