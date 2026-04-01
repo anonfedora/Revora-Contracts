@@ -21,6 +21,8 @@
 /// - Assertions are deterministic (no state-dependent randomness)
 /// - Assertions are testable in isolation
 /// - Clear error messages aid debugging and forensic analysis
+use alloc::{format, string::String};
+use core::fmt::Debug;
 
 use crate::RevoraError;
 use soroban_sdk::{Address, Env};
@@ -522,15 +524,12 @@ pub mod abort_handling {
     /// assert_operation_fails(result, RevoraError::InvalidRevenueShareBps)?;
     /// ```
     pub fn assert_operation_fails(
-        result: Result<impl std::fmt::Debug, RevoraError>,
+        result: Result<impl Debug, RevoraError>,
         expected_error: RevoraError,
     ) -> Result<(), String> {
         match result {
             Err(actual) if actual == expected_error => Ok(()),
-            Err(actual) => Err(format!(
-                "Expected {:?} but got {:?}",
-                expected_error, actual
-            )),
+            Err(actual) => Err(format!("Expected {:?} but got {:?}", expected_error, actual)),
             Ok(ok) => Err(format!(
                 "Expected error {:?} but operation succeeded: {:?}",
                 expected_error, ok
@@ -540,7 +539,7 @@ pub mod abort_handling {
 
     /// Assertion that an operation should have succeeded.
     /// Used in testing to verify happy path execution.
-    pub fn assert_operation_succeeds<T: std::fmt::Debug>(
+    pub fn assert_operation_succeeds<T: Debug>(
         result: Result<T, RevoraError>,
     ) -> Result<T, String> {
         result.map_err(|e| format!("Operation failed with: {:?}", e))
@@ -565,45 +564,17 @@ pub mod abort_handling {
     /// - `true` if error is recoverable (e.g., OfferingNotFound)
     /// - `false` if error is fatal (e.g., ConcentrationLimitExceeded during enforcement)
     pub fn is_recoverable_error(error: &RevoraError) -> bool {
-        use RevoraError::*;
-        match error {
-            // Recoverable informational errors
-            OfferingNotFound
-            | PeriodAlreadyDeposited
-            | NoPendingClaims
-            | OutdatedSnapshot
-            | MetadataInvalidFormat
-            | ReportingWindowClosed
-            | ClaimWindowClosed
-            | SignatureExpired => true,
-
-            // Fatal errors that prevent continuation
-            InvalidRevenueShareBps
-            | InvalidShareBps
-            | InvalidAmount
-            | InvalidPeriodId
-            | ConcentrationLimitExceeded
-            | ContractFrozen
-            | NotAuthorized
-            | NotInitialized
-            | IssuerTransferPending
-            | NoTransferPending
-            | UnauthorizedTransferAccept
-            | AdminRotationPending
-            | NoAdminRotationPending
-            | UnauthorizedRotationAccept
-            | AdminRotationSameAddress
-            | SignatureReplay
-            | SignerKeyNotRegistered
-            | HolderBlacklisted
-            | PaymentTokenMismatch
-            | ClaimDelayNotElapsed
-            | LimitReached
-            | SnapshotNotEnabled
-            | PayoutAssetMismatch
-            | MetadataTooLarge
-            | SupplyCapExceeded => false,
-        }
+        matches!(
+            error,
+            RevoraError::OfferingNotFound
+                | RevoraError::PeriodAlreadyDeposited
+                | RevoraError::NoPendingClaims
+                | RevoraError::OutdatedSnapshot
+                | RevoraError::MetadataInvalidFormat
+                | RevoraError::ReportingWindowClosed
+                | RevoraError::ClaimWindowClosed
+                | RevoraError::SignatureExpired
+        )
     }
 
     /// Log an operation failure for audit purposes (in testing contexts).
@@ -748,10 +719,7 @@ mod tests {
 
         #[test]
         fn test_safe_add_overflow() {
-            assert_eq!(
-                safe_math::safe_add(i128::MAX, 1),
-                Err(RevoraError::LimitReached)
-            );
+            assert_eq!(safe_math::safe_add(i128::MAX, 1), Err(RevoraError::LimitReached));
         }
 
         #[test]
@@ -761,10 +729,7 @@ mod tests {
 
         #[test]
         fn test_safe_sub_underflow() {
-            assert_eq!(
-                safe_math::safe_sub(i128::MIN, 1),
-                Err(RevoraError::LimitReached)
-            );
+            assert_eq!(safe_math::safe_sub(i128::MIN, 1), Err(RevoraError::LimitReached));
         }
 
         #[test]
@@ -774,10 +739,7 @@ mod tests {
 
         #[test]
         fn test_safe_mul_overflow() {
-            assert_eq!(
-                safe_math::safe_mul(i128::MAX, 2),
-                Err(RevoraError::LimitReached)
-            );
+            assert_eq!(safe_math::safe_mul(i128::MAX, 2), Err(RevoraError::LimitReached));
         }
 
         #[test]
@@ -787,10 +749,7 @@ mod tests {
 
         #[test]
         fn test_safe_div_by_zero() {
-            assert_eq!(
-                safe_math::safe_div(1_000, 0),
-                Err(RevoraError::LimitReached)
-            );
+            assert_eq!(safe_math::safe_div(1_000, 0), Err(RevoraError::LimitReached));
         }
 
         #[test]
@@ -862,9 +821,7 @@ mod tests {
 
         #[test]
         fn test_is_recoverable_error_offering_not_found() {
-            assert!(abort_handling::is_recoverable_error(
-                &RevoraError::OfferingNotFound
-            ));
+            assert!(abort_handling::is_recoverable_error(&RevoraError::OfferingNotFound));
         }
 
         #[test]

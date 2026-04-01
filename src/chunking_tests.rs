@@ -29,8 +29,7 @@ fn mint_tokens(env: &Env, payment_token: &Address, recipient: &Address, amount: 
     token::StellarAssetClient::new(env, payment_token).mint(recipient, amount);
 }
 
-fn setup_with_offering(
-) -> (Env, RevoraRevenueShareClient, Address, Address, Address, Address) {
+fn setup_with_offering() -> (Env, RevoraRevenueShareClient, Address, Address, Address, Address) {
     let (env, client, issuer) = setup();
     let token = Address::generate(&env);
     let (payment_token, pt_admin) = create_payment_token(&env);
