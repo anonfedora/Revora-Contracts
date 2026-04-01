@@ -1300,7 +1300,7 @@ impl RevoraRevenueShare {
         env.storage().persistent().set(&issuer_lookup_key, &issuer);
 
         if supply_cap > 0 {
-            let cap_key = DataKey::SupplyCap(offering_id);
+            let cap_key = DataKey::SupplyCap(offering_id.clone());
             env.storage().persistent().set(&cap_key, &supply_cap);
         }
 
@@ -1697,6 +1697,7 @@ impl RevoraRevenueShare {
                 (EVENT_REV_INIT_V1, issuer.clone(), namespace.clone(), token.clone()),
                 (EVENT_SCHEMA_VERSION, amount, period_id, blacklist.clone()),
             );
+        }
 
             env.events().publish(
                 (EVENT_REV_INIA_V1, issuer.clone(), namespace.clone(), token.clone()),
@@ -4264,22 +4265,34 @@ impl RevoraRevenueShare {
                 owners.push_back(new_owner);
                 env.storage().persistent().set(&DataKey::MultisigOwners, &owners);
             }
-            ProposalAction::RemoveOwner(old_owner) => {
-                let owners: Vec<Address> =
+            ProposalAction::RemoveOwner(addr) => {
+                let mut owners: Vec<Address> =
                     env.storage().persistent().get(&DataKey::MultisigOwners).unwrap();
+
+                // Guard 1: existence check — addr must currently be an owner
+                if !owners.contains(&addr) {
+                    return Err(RevoraError::NotAuthorized);
+                }
+
+                // Guard 2: threshold invariant — removal must not drop owner count below threshold
+                let threshold: u32 =
+                    env.storage().persistent().get(&DataKey::MultisigThreshold).unwrap();
+                if (owners.len() - 1) < threshold {
+                    return Err(RevoraError::LimitReached);
+                }
+
+                // Remove addr from owners
                 let mut new_owners = Vec::new(&env);
                 for i in 0..owners.len() {
                     let owner = owners.get(i).unwrap();
-                    if owner != old_owner {
+                    if owner != addr {
                         new_owners.push_back(owner);
                     }
                 }
-                let threshold: u32 =
-                    env.storage().persistent().get(&DataKey::MultisigThreshold).unwrap();
-                if new_owners.len() < threshold || new_owners.is_empty() {
-                    return Err(RevoraError::LimitReached); // Would break threshold
-                }
-                env.storage().persistent().set(&DataKey::MultisigOwners, &new_owners);
+                owners = new_owners;
+
+                // Persist updated owners list
+                env.storage().persistent().set(&DataKey::MultisigOwners, &owners);
             }
         }
 
