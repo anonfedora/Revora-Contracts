@@ -22,3 +22,5 @@ testutils = ["soroban-sdk/testutils"]
 
 [profile.release]
 overflow-checks = true
+
+
