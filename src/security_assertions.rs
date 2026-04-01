@@ -496,9 +496,6 @@ pub mod safe_math {
     /// # Returns
     /// - `Ok(share)` where 0 ≤ share ≤ amount
     /// - `Err(LimitReached)` if overflow occurs during multiplication
-    ///
-    /// # Invariant
-    /// Result always satisfies 0 ≤ share ≤ amount (by definition of division)
     pub fn safe_compute_share(amount: i128, bps: u32) -> Result<i128, RevoraError> {
         let bps_i128 = bps as i128;
         let raw = amount.checked_mul(bps_i128).ok_or(RevoraError::LimitReached)?;
@@ -517,12 +514,7 @@ pub mod abort_handling {
 
     /// Assertion that an operation should have succeeded or fail with a specific error.
     /// Used in testing to verify error propagation paths.
-    ///
-    /// # Example
-    /// ```ignore
-    /// let result = contract.register_offering(...);
-    /// assert_operation_fails(result, RevoraError::InvalidRevenueShareBps)?;
-    /// ```
+    #[cfg(test)]
     pub fn assert_operation_fails(
         result: Result<impl Debug, RevoraError>,
         expected_error: RevoraError,
