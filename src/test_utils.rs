@@ -9,9 +9,9 @@ pub fn setup_context() -> (Env, RevoraRevenueShareClient, Address, Address, Addr
     let env = Env::default();
     env.mock_all_auths();
     let contract_id = env.register_contract(None, RevoraRevenueShare);
-    let client = RevoraRevenueShareClient::new(env, &contract_id);
-    let issuer = Address::generate(env);
-    let token = Address::generate(env);
-    let payout_asset = Address::generate(env);
-    (client, contract_id, issuer, token, payout_asset)
+    let client = RevoraRevenueShareClient::new(&env, &contract_id);
+    let issuer = Address::generate(&env);
+    let token = Address::generate(&env);
+    let payout_asset = Address::generate(&env);
+    (env, client, contract_id, issuer, token, payout_asset)
 }

@@ -21,6 +21,9 @@
 /// - Assertions are deterministic (no state-dependent randomness)
 /// - Assertions are testable in isolation
 /// - Clear error messages aid debugging and forensic analysis
+use alloc::{format, string::String};
+use core::fmt::Debug;
+
 use crate::RevoraError;
 use soroban_sdk::{Address, Env};
 
@@ -513,7 +516,7 @@ pub mod abort_handling {
     /// Used in testing to verify error propagation paths.
     #[cfg(test)]
     pub fn assert_operation_fails(
-        result: Result<impl std::fmt::Debug, RevoraError>,
+        result: Result<impl Debug, RevoraError>,
         expected_error: RevoraError,
     ) -> Result<(), String> {
         match result {
@@ -528,8 +531,7 @@ pub mod abort_handling {
 
     /// Assertion that an operation should have succeeded.
     /// Used in testing to verify happy path execution.
-    #[cfg(test)]
-    pub fn assert_operation_succeeds<T: std::fmt::Debug>(
+    pub fn assert_operation_succeeds<T: Debug>(
         result: Result<T, RevoraError>,
     ) -> Result<T, String> {
         result.map_err(|e| format!("Operation failed with: {:?}", e))
@@ -554,45 +556,17 @@ pub mod abort_handling {
     /// - `true` if error is recoverable (e.g., OfferingNotFound)
     /// - `false` if error is fatal (e.g., ConcentrationLimitExceeded during enforcement)
     pub fn is_recoverable_error(error: &RevoraError) -> bool {
-        use RevoraError::*;
-        match error {
-            // Recoverable informational errors
-            OfferingNotFound
-            | PeriodAlreadyDeposited
-            | NoPendingClaims
-            | OutdatedSnapshot
-            | MetadataInvalidFormat
-            | ReportingWindowClosed
-            | ClaimWindowClosed
-            | SignatureExpired => true,
-
-            // Fatal errors that prevent continuation
-            InvalidRevenueShareBps
-            | InvalidShareBps
-            | InvalidAmount
-            | InvalidPeriodId
-            | ConcentrationLimitExceeded
-            | ContractFrozen
-            | NotAuthorized
-            | NotInitialized
-            | IssuerTransferPending
-            | NoTransferPending
-            | UnauthorizedTransferAccept
-            | AdminRotationPending
-            | NoAdminRotationPending
-            | UnauthorizedRotationAccept
-            | AdminRotationSameAddress
-            | SignatureReplay
-            | SignerKeyNotRegistered
-            | HolderBlacklisted
-            | PaymentTokenMismatch
-            | ClaimDelayNotElapsed
-            | LimitReached
-            | SnapshotNotEnabled
-            | PayoutAssetMismatch
-            | MetadataTooLarge
-            | SupplyCapExceeded => false,
-        }
+        matches!(
+            error,
+            RevoraError::OfferingNotFound
+                | RevoraError::PeriodAlreadyDeposited
+                | RevoraError::NoPendingClaims
+                | RevoraError::OutdatedSnapshot
+                | RevoraError::MetadataInvalidFormat
+                | RevoraError::ReportingWindowClosed
+                | RevoraError::ClaimWindowClosed
+                | RevoraError::SignatureExpired
+        )
     }
 
     /// Log an operation failure for audit purposes (in testing contexts).
