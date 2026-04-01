@@ -128,7 +128,8 @@ const EVENT_PROPOSAL_APPROVED: Symbol = symbol_short!("prop_app");
 const EVENT_PROPOSAL_EXECUTED: Symbol = symbol_short!("prop_exe");
 
 #[contracttype]
-#[derive(Clone, Debug, PartialEq, proptest::prelude::Arbitrary)]
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(proptest::prelude::Arbitrary))]
 pub enum ProposalAction {
     SetAdmin(Address),
     Freeze,
@@ -184,6 +185,7 @@ const EVENT_CLAIM_WINDOW_SET: Symbol = symbol_short!("clm_win");
 const EVENT_META_SIGNER_SET: Symbol = symbol_short!("meta_key");
 const EVENT_META_DELEGATE_SET: Symbol = symbol_short!("meta_del");
 const EVENT_META_SHARE_SET: Symbol = symbol_short!("meta_shr");
+const EVENT_MULTISIG_INIT: Symbol = symbol_short!("ms_init");
 const EVENT_META_REV_APPROVE: Symbol = symbol_short!("meta_rev");
 /// Emitted when `repair_audit_summary` writes a corrected `AuditSummary` to storage.
 const EVENT_AUDIT_REPAIRED: Symbol = symbol_short!("aud_rep");
@@ -193,7 +195,6 @@ const INDEXER_EVENT_SCHEMA_VERSION: u32 = 2;
 
 const EVENT_CONC_LIMIT_SET: Symbol = symbol_short!("conc_lim");
 const EVENT_ROUNDING_MODE_SET: Symbol = symbol_short!("rnd_mode");
-const EVENT_MULTISIG_INIT: Symbol = symbol_short!("msig_init");
 const EVENT_ADMIN_SET: Symbol = symbol_short!("admin_set");
 const EVENT_PLATFORM_FEE_SET: Symbol = symbol_short!("fee_set");
 const BPS_DENOMINATOR: i128 = 10_000;
@@ -535,6 +536,8 @@ pub enum DataKey {
     StressDataEntry(Address, u32),
     /// Tracks total amount of dummy data allocated per admin.
     StressDataCount(Address),
+    /// Packed flags: (event_versioning_enabled: bool, event_only_mode: bool).
+    ContractFlags,
 }
 
 /// Maximum number of offerings returned in a single page.
@@ -555,7 +558,6 @@ const MAX_CHUNK_PERIODS: u32 = 200;
 
 /// Categories of amount validation contexts in the contract.
 /// Each category has specific rules for what constitutes a valid amount.
-#[contracttype]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AmountValidationCategory {
     /// Revenue deposit: amount must be strictly positive (> 0).
@@ -591,7 +593,6 @@ pub enum AmountValidationCategory {
 }
 
 /// Result of amount validation with detailed classification.
-#[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AmountValidationResult {
     /// The original amount that was validated.
@@ -1322,11 +1323,12 @@ impl RevoraRevenueShare {
             (revenue_share_bps, payout_asset.clone()),
         );
 
-        Self::emit_v2_event(
-            &env,
-            (EVENT_OFFER_REG_V2, issuer.clone(), namespace.clone()),
-            (token.clone(), revenue_share_bps, payout_asset.clone()),
-        );
+        if Self::is_event_versioning_enabled(env.clone()) {
+            env.events().publish(
+                (EVENT_OFFER_REG_V1, issuer.clone(), namespace.clone()),
+                (EVENT_SCHEMA_VERSION, token.clone(), revenue_share_bps, payout_asset.clone()),
+            );
+        }
 
         Ok(())
     }
@@ -1697,39 +1699,23 @@ impl RevoraRevenueShare {
             );
         }
 
-        /// Versioned event v2: [version: u32, payout_asset: Address, amount: i128, period_id: u64, blacklist: Vec<Address>]
-        Self::emit_v2_event(
-            &env,
-            (EVENT_REV_INIA_V2, issuer.clone(), namespace.clone(), token.clone()),
-            (payout_asset.clone(), amount, period_id, blacklist.clone()),
-        );
+            env.events().publish(
+                (EVENT_REV_INIA_V1, issuer.clone(), namespace.clone(), token.clone()),
+                (EVENT_SCHEMA_VERSION, payout_asset.clone(), amount, period_id, blacklist.clone()),
+            );
 
-        /// Versioned event v2: [version: u32, amount: i128, period_id: u64, blacklist: Vec<Address>]
-        Self::emit_v2_event(
-            &env,
-            (EVENT_REV_REP_V2, issuer.clone(), namespace.clone(), token.clone()),
-            (amount, period_id, blacklist.clone()),
-        );
+            env.events().publish(
+                (EVENT_REV_REP_V1, issuer.clone(), namespace.clone(), token.clone()),
+                (EVENT_SCHEMA_VERSION, amount, period_id, blacklist.clone()),
+            );
 
-        /// Versioned event v2: [version: u32, payout_asset: Address, amount: i128, period_id: u64]
-        Self::emit_v2_event(
-            &env,
-            (EVENT_REV_REPA_V2, issuer.clone(), namespace.clone(), token.clone()),
-            (payout_asset.clone(), amount, period_id),
-        );
-
-        let is_consistent = !saturated
-            && stored.total_revenue == computed_total
-            && stored.report_count == computed_report_count;
-
-        AuditReconciliationResult {
-            stored_total_revenue: stored.total_revenue,
-            stored_report_count: stored.report_count,
-            computed_total_revenue: computed_total,
-            computed_report_count,
-            is_consistent,
-            is_saturated: saturated,
+            env.events().publish(
+                (EVENT_REV_REPA_V1, issuer.clone(), namespace.clone(), token.clone()),
+                (EVENT_SCHEMA_VERSION, payout_asset.clone(), amount, period_id),
+            );
         }
+
+        Ok(())
     }
 
     /// Repair the `AuditSummary` for an offering by recomputing it from the
@@ -3876,7 +3862,6 @@ impl RevoraRevenueShare {
         let idx_key = DataKey::LastClaimedIdx(offering_id, holder);
         env.storage().persistent().set(&idx_key, &last_claimed_idx);
     }
-
     // ── On-chain distribution simulation (#29) ────────────────────
 
     /// Read-only: simulate distribution for sample inputs without mutating state.
@@ -4118,6 +4103,8 @@ impl RevoraRevenueShare {
 
     // ── Multisig admin logic ───────────────────────────────────
 
+    pub const MAX_MULTISIG_OWNERS: u32 = 20;
+
     /// Initialize the multisig admin system. May only be called once.
     /// Only the caller (deployer/admin) needs to authorize; owners are registered
     /// without requiring their individual signatures at init time.
@@ -4132,19 +4119,41 @@ impl RevoraRevenueShare {
         threshold: u32,
     ) -> Result<(), RevoraError> {
         caller.require_auth();
+
+        // Must be the initialized admin
+        let admin: Address =
+            env.storage().persistent().get(&DataKey::Admin).ok_or(RevoraError::NotInitialized)?;
+        if caller != admin {
+            return Err(RevoraError::NotAuthorized);
+        }
+
         if env.storage().persistent().has(&DataKey::MultisigThreshold) {
             return Err(RevoraError::LimitReached); // Already initialized
         }
         if owners.is_empty() {
             return Err(RevoraError::LimitReached); // Must have at least one owner
         }
+        if owners.len() > Self::MAX_MULTISIG_OWNERS {
+            return Err(RevoraError::LimitReached);
+        }
         if threshold == 0 || threshold > owners.len() {
             return Err(RevoraError::LimitReached); // Improper threshold
         }
+
+        // Check for duplicate owners
+        for i in 0..owners.len() {
+            let owner_i = owners.get(i).unwrap();
+            for j in (i + 1)..owners.len() {
+                if owner_i == owners.get(j).unwrap() {
+                    return Err(RevoraError::LimitReached);
+                }
+            }
+        }
+
         env.storage().persistent().set(&DataKey::MultisigThreshold, &threshold);
         env.storage().persistent().set(&DataKey::MultisigOwners, &owners.clone());
         env.storage().persistent().set(&DataKey::MultisigProposalCount, &0_u32);
-        env.events().publish((EVENT_MULTISIG_INIT,), (owners, threshold));
+        env.events().publish((EVENT_MULTISIG_INIT, caller.clone()), (owners.len(), threshold));
         Ok(())
     }
 
