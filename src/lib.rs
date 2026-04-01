@@ -206,6 +206,10 @@ const EVENT_ROUNDING_MODE_SET: Symbol = symbol_short!("rnd_mode");
 const EVENT_ADMIN_SET: Symbol = symbol_short!("admin_set");
 const EVENT_PLATFORM_FEE_SET: Symbol = symbol_short!("fee_set");
 const BPS_DENOMINATOR: i128 = 10_000;
+/// Stellar network canonical decimal precision (7 decimal places, i.e., stroops).
+const STELLAR_CANONICAL_DECIMALS: u32 = 7;
+/// Maximum accepted decimal precision (safety cap for normalization math).
+const MAX_TOKEN_DECIMALS: u32 = 18;
 
 /// Represents a revenue-share offering registered on-chain.
 /// Offerings are immutable once registered.
@@ -2615,6 +2619,83 @@ impl RevoraRevenueShare {
         let lo = core::cmp::min(0, amount);
         let hi = core::cmp::max(0, amount);
         core::cmp::min(core::cmp::max(share, lo), hi)
+    }
+
+    /// Normalize `amount` from the token's native decimal precision to Stellar's canonical 7-decimal
+    /// (stroop) precision used internally by this contract.
+    ///
+    /// - If `from_decimals == 7`: returns `amount` unchanged.
+    /// - If `from_decimals < 7`: scales **up** by `10^(7 - from_decimals)` (e.g., 6-decimal USDC → 7).
+    /// - If `from_decimals > 7`: scales **down** by `10^(from_decimals - 7)` using integer truncation.
+    ///
+    /// Returns `0` if intermediate arithmetic overflows to prevent fund inflation bugs.
+    fn normalize_amount(amount: i128, from_decimals: u32) -> i128 {
+        if from_decimals == STELLAR_CANONICAL_DECIMALS {
+            return amount;
+        }
+        if from_decimals < STELLAR_CANONICAL_DECIMALS {
+            let exp = STELLAR_CANONICAL_DECIMALS - from_decimals;
+            let factor: i128 = match 10_i128.checked_pow(exp) {
+                Some(f) => f,
+                None => return 0,
+            };
+            amount.checked_mul(factor).unwrap_or(0)
+        } else {
+            let exp = from_decimals - STELLAR_CANONICAL_DECIMALS;
+            let factor: i128 = match 10_i128.checked_pow(exp) {
+                Some(f) => f,
+                None => return 0,
+            };
+            amount.checked_div(factor).unwrap_or(0)
+        }
+    }
+
+    /// Set the decimal precision of the payout asset for an offering.
+    ///
+    /// Must be called by the offering `issuer`. Accepted range is `0..=18`.
+    /// If not set, the contract defaults to `7` (Stellar canonical stroops).
+    ///
+    /// ### Security
+    /// - Only the offering issuer may configure decimals.
+    /// - Misconfigured decimals directly affect payout arithmetic; issuers must supply
+    ///   the on-chain token's actual decimal value.
+    ///
+    /// ### Errors
+    /// - `RevoraError::NotAuthorized` if caller is not the issuer.
+    /// - `RevoraError::LimitReached` if `decimals > 18`.
+    pub fn set_payment_token_decimals(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+        decimals: u32,
+    ) -> Result<(), RevoraError> {
+        issuer.require_auth();
+        if decimals > MAX_TOKEN_DECIMALS {
+            return Err(RevoraError::LimitReached);
+        }
+        let offering_id = OfferingId { issuer: issuer.clone(), namespace: namespace.clone(), token: token.clone() };
+        env.storage()
+            .persistent()
+            .set(&DataKey::PaymentTokenDecimals(offering_id), &decimals);
+        env.events()
+            .publish((EVENT_DECIMAL_SET, issuer, namespace, token), decimals);
+        Ok(())
+    }
+
+    /// Get the configured decimal precision of the payout asset for an offering.
+    /// Defaults to `7` (Stellar canonical stroops) if not explicitly set.
+    pub fn get_payment_token_decimals(
+        env: Env,
+        issuer: Address,
+        namespace: Symbol,
+        token: Address,
+    ) -> u32 {
+        let offering_id = OfferingId { issuer, namespace, token };
+        env.storage()
+            .persistent()
+            .get(&DataKey::PaymentTokenDecimals(offering_id))
+            .unwrap_or(STELLAR_CANONICAL_DECIMALS)
     }
 
     // ── Multi-period aggregated claims ───────────────────────────
